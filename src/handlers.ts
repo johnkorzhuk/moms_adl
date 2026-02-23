@@ -33,7 +33,12 @@ function formatTime(): string {
   });
 }
 
-function parseTimeToISO(input: string): string | null {
+/**
+ * Parse a human time string like "2:35 PM", "14:35", "2:35pm"
+ * and return a full ISO 8601 timestamp using the reference date's day in the configured timezone.
+ * If no reference date is provided, uses today.
+ */
+function parseTimeToISO(input: string, referenceISO?: string): string | null {
   const trimmed = input.trim().toUpperCase();
 
   const match12 = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/);
@@ -44,7 +49,7 @@ function parseTimeToISO(input: string): string | null {
     if (hours < 1 || hours > 12 || minutes > 59) return null;
     if (period === "AM" && hours === 12) hours = 0;
     if (period === "PM" && hours !== 12) hours += 12;
-    return buildISO(hours, minutes);
+    return buildISO(hours, minutes, referenceISO);
   }
 
   const match24 = trimmed.match(/^(\d{1,2}):(\d{2})$/);
@@ -52,18 +57,20 @@ function parseTimeToISO(input: string): string | null {
     const hours = Number(match24[1]);
     const minutes = Number(match24[2]);
     if (hours > 23 || minutes > 59) return null;
-    return buildISO(hours, minutes);
+    return buildISO(hours, minutes, referenceISO);
   }
 
   return null;
 }
 
-function buildISO(hours: number, minutes: number): string {
-  const now = new Date();
-  const dateStr = now.toLocaleDateString("en-CA", { timeZone: TZ });
+function buildISO(hours: number, minutes: number, referenceISO?: string): string {
+  const ref = referenceISO ? new Date(referenceISO) : new Date();
+  const dateStr = ref.toLocaleDateString("en-CA", { timeZone: TZ }); // YYYY-MM-DD from the event's day
   const hh = String(hours).padStart(2, "0");
   const mm = String(minutes).padStart(2, "0");
   const d = new Date(`${dateStr}T${hh}:${mm}:00`);
+  // Workers run in UTC — adjust for TZ offset
+  const now = new Date();
   const utcNow = new Date(now.toLocaleString("en-US", { timeZone: "UTC" }));
   const tzNow = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
   const offsetMs = utcNow.getTime() - tzNow.getTime();
@@ -379,10 +386,13 @@ export const handleGroupTimeReply = (
 ): Effect.Effect<void, Err, Deps> =>
   Effect.gen(function* () {
     yield* log(`Group time reply: event #${eventId}, time: ${timeText}`);
-    const menuState = yield* MenuState;
-    const notifier = yield* Notifier;
+    const repo = yield* EventRepo;
 
-    const timestamp = parseTimeToISO(timeText);
+    // Fetch the event to use its creation date for the custom time
+    const event = yield* repo.get(eventId);
+    const referenceISO = event?.timestamp;
+
+    const timestamp = parseTimeToISO(timeText, referenceISO ?? undefined);
     if (!timestamp) {
       yield* log(`Failed to parse time: "${timeText}"`);
     }

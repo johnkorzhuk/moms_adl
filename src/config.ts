@@ -86,7 +86,7 @@ export const config: Config = {
         { label: "Мити підлогу", name: "Wash Floors" },
         { label: "Сміття", name: "Trash" },
         { label: "Чистити ванну", name: "Clean Bathroom" },
-        { label: "Прибрати відходи", name: "Waste Cleanup" },
+        { label: "Прибрати відходи", name: "Incontinence Cleanup" },
       ],
     },
     reach: {
