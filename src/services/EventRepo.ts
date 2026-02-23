@@ -7,11 +7,10 @@ export class EventRepo extends Context.Tag("EventRepo")<
   {
     readonly insert: (
       category: string,
-      status: "open" | "done"
+      doneAt?: string | null
     ) => Effect.Effect<number, D1Error>;
     readonly insertAt: (
       category: string,
-      status: "open" | "done",
       timestamp: string,
       doneAt: string | null
     ) => Effect.Effect<number, D1Error>;
@@ -39,30 +38,29 @@ export class EventRepo extends Context.Tag("EventRepo")<
 
 export const EventRepoLive = (db: D1Database) =>
   Layer.succeed(EventRepo, {
-    insert: (category, status) =>
+    insert: (category, doneAt) =>
       Effect.tryPromise({
         try: async () => {
           const timestamp = new Date().toISOString();
-          const doneAt = status === "done" ? timestamp : null;
           const result = await db
             .prepare(
-              "INSERT INTO events (timestamp, category, status, done_at) VALUES (?, ?, ?, ?) RETURNING id"
+              "INSERT INTO events (timestamp, category, done_at) VALUES (?, ?, ?) RETURNING id"
             )
-            .bind(timestamp, category, status, doneAt)
+            .bind(timestamp, category, doneAt ?? null)
             .first<{ id: number }>();
           return result!.id;
         },
         catch: (cause) => new D1Error({ cause }),
       }),
 
-    insertAt: (category, status, timestamp, doneAt) =>
+    insertAt: (category, timestamp, doneAt) =>
       Effect.tryPromise({
         try: async () => {
           const result = await db
             .prepare(
-              "INSERT INTO events (timestamp, category, status, done_at) VALUES (?, ?, ?, ?) RETURNING id"
+              "INSERT INTO events (timestamp, category, done_at) VALUES (?, ?, ?) RETURNING id"
             )
-            .bind(timestamp, category, status, doneAt)
+            .bind(timestamp, category, doneAt)
             .first<{ id: number }>();
           return result!.id;
         },
@@ -73,7 +71,7 @@ export const EventRepoLive = (db: D1Database) =>
       Effect.tryPromise({
         try: () =>
           db
-            .prepare("UPDATE events SET status = 'done', done_at = ? WHERE id = ?")
+            .prepare("UPDATE events SET done_at = ? WHERE id = ?")
             .bind(doneAt, id)
             .run()
             .then(() => undefined),
@@ -118,7 +116,7 @@ export const EventRepoLive = (db: D1Database) =>
         try: () =>
           db
             .prepare(
-              "SELECT id, timestamp, category, status, done_at, notes FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+              "SELECT id, timestamp, category, done_at, notes FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?"
             )
             .bind(limit, offset)
             .all<EventRow>()
@@ -131,7 +129,7 @@ export const EventRepoLive = (db: D1Database) =>
         try: () =>
           db
             .prepare(
-              "SELECT id, timestamp, category, status, done_at, notes FROM events WHERE id = ?"
+              "SELECT id, timestamp, category, done_at, notes FROM events WHERE id = ?"
             )
             .bind(id)
             .first<EventRow>(),
@@ -143,7 +141,7 @@ export const EventRepoLive = (db: D1Database) =>
         try: () =>
           db
             .prepare(
-              "SELECT id, timestamp, category, status, done_at, notes FROM events ORDER BY timestamp ASC"
+              "SELECT id, timestamp, category, done_at, notes FROM events ORDER BY timestamp ASC"
             )
             .all<EventRow>()
             .then((r) => r.results),

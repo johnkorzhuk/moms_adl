@@ -187,16 +187,15 @@ const editGroupMsgSafe = (notifier: Notifier["Type"], msgId: number, text: strin
 const logAndNotify = (
   momChatId: number,
   momMenuMsgId: number,
-  categoryName: string,
-  status: "open" | "done"
+  categoryName: string
 ) =>
   Effect.gen(function* () {
     const repo = yield* EventRepo;
     const notifier = yield* Notifier;
     const menuState = yield* MenuState;
 
-    const eventId = yield* repo.insert(categoryName, status);
-    yield* log(`Logged event #${eventId}: ${categoryName} (${status})`);
+    const eventId = yield* repo.insert(categoryName);
+    yield* log(`Logged event #${eventId}: ${categoryName}`);
 
     const groupMsgId = yield* notifySafe(notifier, categoryName, groupDoneKeyboard(eventId));
 
@@ -223,7 +222,7 @@ function buildGroupText(event: EventRow, categoryName: string): string {
   });
 
   let text: string;
-  if (event.status === "done" && event.done_at) {
+  if (event.done_at) {
     const doneDisplay = new Date(event.done_at).toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
@@ -328,10 +327,10 @@ export const handleExport = (api: Api, chatId: number): Effect.Effect<void, Err,
     }
 
     const csv = [
-      "timestamp,category,status,done_at,notes",
+      "timestamp,category,done_at,notes",
       ...rows.map(
         (r) =>
-          `${r.timestamp},"${r.category}",${r.status},${r.done_at ?? ""},"${(r.notes ?? "").replace(/"/g, '""')}"`
+          `${r.timestamp},"${r.category}",${r.done_at ?? ""},"${(r.notes ?? "").replace(/"/g, '""')}"`
       ),
     ].join("\n");
 
@@ -357,7 +356,7 @@ export const handleSingle = (
     const cat = config.categories[catId];
     if (!cat) return;
     yield* log(`Single: ${cat.name}`);
-    yield* logAndNotify(chatId, msgId, cat.name, "open");
+    yield* logAndNotify(chatId, msgId, cat.name);
     yield* editMenu(api, chatId, msgId, "✅ Записано", mainMenuKeyboard());
     yield* delay(2000);
     yield* editMenu(api, chatId, msgId, MAIN_MENU_TEXT, mainMenuKeyboard());
@@ -376,7 +375,7 @@ export const handlePairedStart = (
     yield* log(`Paired start: ${cat.name}`);
 
     const menuState = yield* MenuState;
-    const eventId = yield* logAndNotify(chatId, msgId, cat.name, "open");
+    const eventId = yield* logAndNotify(chatId, msgId, cat.name);
     yield* menuState.setPaired(chatId, { eventId, catId });
     yield* editMenu(api, chatId, msgId, cat.label, pairedFinishKeyboard(catId));
   });
@@ -400,7 +399,7 @@ export const handlePairedFinish = (
     if (!session) return;
 
     // Log the finish as a separate done event in D1 (no group notification for this one)
-    yield* repo.insert(cat.finish_name, "done");
+    yield* repo.insert(cat.finish_name, new Date().toISOString());
 
     // Mark the original start event as done and update its group message
     const doneTime = formatTime();
@@ -440,7 +439,7 @@ export const handleSubtask = (
 
     const label = `${cat.name} — ${subtask.name}`;
     yield* log(`Sub-task: ${label}`);
-    yield* logAndNotify(chatId, msgId, label, "open");
+    yield* logAndNotify(chatId, msgId, label);
     yield* editMenu(api, chatId, msgId, "✅ Записано", mainMenuKeyboard());
     yield* delay(2000);
     yield* editMenu(api, chatId, msgId, MAIN_MENU_TEXT, mainMenuKeyboard());
@@ -566,7 +565,7 @@ export const handleGroupStartTimeReply = (
     const updatedEvent = yield* repo.get(eventId);
     if (updatedEvent) {
       const groupText = buildGroupText(updatedEvent, groupInfo.categoryName);
-      const keyboard = updatedEvent.status === "done"
+      const keyboard = updatedEvent.done_at
         ? groupEditTimeKeyboard(eventId)
         : groupDoneKeyboard(eventId);
       yield* editGroupMsgSafe(notifier, groupInfo.groupMsgId, groupText, keyboard);
@@ -645,9 +644,8 @@ const insertAndNotify = (categoryName: string, timestamp: string, doneAt: string
     const notifier = yield* Notifier;
     const menuState = yield* MenuState;
 
-    const status = doneAt ? "done" as const : "open" as const;
-    const eventId = yield* repo.insertAt(categoryName, status, timestamp, doneAt);
-    yield* log(`Inserted event #${eventId}: ${categoryName} (${status})`);
+    const eventId = yield* repo.insertAt(categoryName, timestamp, doneAt);
+    yield* log(`Inserted event #${eventId}: ${categoryName}`);
 
     const startDisplay = new Date(timestamp).toLocaleTimeString("en-US", {
       hour: "numeric", minute: "2-digit", hour12: true, timeZone: TZ,
@@ -950,7 +948,7 @@ const buildEditPageContent = (events: EventRow[], offset: number, hasMore: boole
       timeZone: TZ,
     });
     let label = `${event.category} — ${startTime}`;
-    if (event.status === "done" && event.done_at) {
+    if (event.done_at) {
       const doneTime = new Date(event.done_at).toLocaleTimeString("en-US", {
         hour: "numeric",
         minute: "2-digit",
@@ -1031,7 +1029,7 @@ export const handleEditSelect = (
     const startTime = formatEventTime(event.timestamp);
     let text = `${event.category}\nStarted: ${startTime}`;
 
-    if (event.status === "done" && event.done_at) {
+    if (event.done_at) {
       text += `\nDone: ${formatEventTime(event.done_at)}`;
     } else {
       text += "\nStatus: Open";
@@ -1043,7 +1041,7 @@ export const handleEditSelect = (
 
     const kb = new InlineKeyboard();
     kb.text("✏️ Edit Start", `est:${eventId}`);
-    if (event.status === "done") {
+    if (event.done_at) {
       kb.text("✏️ Edit Done", `edt:${eventId}`);
     }
     kb.row();
@@ -1151,7 +1149,7 @@ export const handleEditNotesReply = (
     const groupInfo = yield* menuState.getGroupMsg(eventId);
     if (event && groupInfo) {
       const groupText = buildGroupText(event, groupInfo.categoryName);
-      const keyboard = event.status === "done"
+      const keyboard = event.done_at
         ? groupEditTimeKeyboard(eventId)
         : groupDoneKeyboard(eventId);
       yield* editGroupMsgSafe(notifier, groupInfo.groupMsgId, groupText, keyboard);

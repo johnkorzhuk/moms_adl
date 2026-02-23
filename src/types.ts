@@ -40,7 +40,6 @@ export interface EventRow {
   id: number;
   timestamp: string;
   category: string;
-  status: string;
   done_at: string | null;
   notes: string | null;
 }
