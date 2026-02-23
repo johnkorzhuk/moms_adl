@@ -2,15 +2,15 @@
 
 Telegram bot for tracking Activities of Daily Living, deployed on Cloudflare Workers.
 
-Mom interacts with a persistent inline-keyboard menu in a private chat. You receive notifications in a shared Telegram group.
+Mom interacts with a persistent inline-keyboard menu (Ukrainian UI) in a private chat. You receive notifications in a shared Telegram group with Done/Custom Time controls. You can also log events directly from the group chat.
 
 ## Stack
 
 - **grammY** — Telegram Bot framework (webhook mode)
 - **Effect** — Typed errors, services, dependency injection
 - **Cloudflare Workers** — Serverless runtime
-- **Cloudflare D1** — SQLite database for the event log
-- **Cloudflare KV** — Stores the persistent menu message ID per chat
+- **Cloudflare D1** — SQLite database for the event log (with status tracking)
+- **Cloudflare KV** — Menu state, group message mappings, paired sessions
 
 ## Prerequisites
 
@@ -46,16 +46,19 @@ Copy the output IDs into `wrangler.toml`:
 ### 3. Set secrets
 
 ```bash
-wrangler secret put BOT_TOKEN
-wrangler secret put GROUP_CHAT_ID
+pnpm wrangler secret put BOT_TOKEN
+pnpm wrangler secret put GROUP_CHAT_ID
+pnpm wrangler secret put USER_ID
 ```
 
-`GROUP_CHAT_ID` is the Telegram chat ID of your notification group. Add the bot to the group, then use the Telegram API or [@userinfobot](https://t.me/userinfobot) to get the group's chat ID (it's a negative number like `-100xxxxxxxxxx`).
+- `BOT_TOKEN` — Telegram bot token from BotFather
+- `GROUP_CHAT_ID` — Chat ID of your notification group (negative number like `-5128384833`)
+- `USER_ID` — Mom's Telegram user ID (restricts bot interaction to her only)
 
 ### 4. Deploy
 
 ```bash
-pnpm deploy
+pnpm wrangler deploy
 ```
 
 ### 5. Run setup (migration + webhook)
@@ -64,21 +67,32 @@ pnpm deploy
 BOT_TOKEN=your_token WEBHOOK_URL=https://momsadl.your-subdomain.workers.dev node scripts/setup.mjs
 ```
 
-This runs the D1 migration and registers the Telegram webhook in one command.
+This runs the D1 migrations and registers the Telegram webhook.
 
 ## Usage
 
-- Mom sends `/start` to the bot — she gets a persistent menu
-- She taps buttons to log activities
-- You see notifications in the group chat
-- Send `/export` to get a CSV of all logged events
+### Mom's private chat
 
-## Customizing Categories
+- `/start` — Creates the persistent inline-keyboard menu
+- Tap buttons to log activities
+- Paired activities (Toilet, Bed, Transfer) show a finish button to mark completion
 
-Edit `src/config.ts`. Categories can be:
+### Group chat (for you)
 
-- **Single-level**: Tap logs immediately (e.g. "Medication Taken")
-- **Two-level**: Tap shows sub-tasks first (e.g. "Transfer" → "Bed → Wheelchair")
+- Notifications appear with **Done** and **Custom Time** buttons
+- **Done** — Marks the event complete with the current time
+- **Custom Time** — Reply with a time like `2:35 PM` to set a specific completion time
+- **Edit Time** — Appears after marking done, lets you correct the time
+- `/log` — Log events directly from the group with preset categories or custom text
+- `/export` — Get a CSV of all logged events
+
+## Category Types
+
+Edit `src/config.ts` to customize. Three types:
+
+- **single** — Tap logs immediately (e.g. Shower, Dressing)
+- **paired** — Start/finish flow with a timer (e.g. Toilet, Bed, Transfer)
+- **subtasks** — Opens a submenu (e.g. Meals → Breakfast/Lunch/Dinner)
 
 ## Development
 
@@ -86,4 +100,4 @@ Edit `src/config.ts`. Categories can be:
 pnpm dev
 ```
 
-For local development, you'll need to use `wrangler dev --remote` for D1 access, or use `--local` with a local D1 database.
+For local development, use `wrangler dev --remote` for D1 access, or `--local` with a local D1 database.
