@@ -9,6 +9,12 @@ export class EventRepo extends Context.Tag("EventRepo")<
       category: string,
       status: "open" | "done"
     ) => Effect.Effect<number, D1Error>;
+    readonly insertAt: (
+      category: string,
+      status: "open" | "done",
+      timestamp: string,
+      doneAt: string | null
+    ) => Effect.Effect<number, D1Error>;
     readonly markDone: (
       id: number,
       doneAt: string
@@ -34,6 +40,20 @@ export const EventRepoLive = (db: D1Database) =>
         try: async () => {
           const timestamp = new Date().toISOString();
           const doneAt = status === "done" ? timestamp : null;
+          const result = await db
+            .prepare(
+              "INSERT INTO events (timestamp, category, status, done_at) VALUES (?, ?, ?, ?) RETURNING id"
+            )
+            .bind(timestamp, category, status, doneAt)
+            .first<{ id: number }>();
+          return result!.id;
+        },
+        catch: (cause) => new D1Error({ cause }),
+      }),
+
+    insertAt: (category, status, timestamp, doneAt) =>
+      Effect.tryPromise({
+        try: async () => {
           const result = await db
             .prepare(
               "INSERT INTO events (timestamp, category, status, done_at) VALUES (?, ?, ?, ?) RETURNING id"

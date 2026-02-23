@@ -14,8 +14,13 @@ function formatTime(): string {
 export class Notifier extends Context.Tag("Notifier")<
   Notifier,
   {
-    /** Send a notification with inline keyboard. Returns the message ID. */
+    /** Send a notification with inline keyboard (appends current time). Returns the message ID. */
     readonly send: (
+      text: string,
+      keyboard: InlineKeyboard
+    ) => Effect.Effect<number, TelegramError>;
+    /** Send a notification with exact text (no time appended). Returns the message ID. */
+    readonly sendRaw: (
       text: string,
       keyboard: InlineKeyboard
     ) => Effect.Effect<number, TelegramError>;
@@ -43,6 +48,17 @@ export const NotifierLive = (api: Api, groupChatId: string) =>
         try: () =>
           api
             .sendMessage(groupChatId, `${text} — ${formatTime()}`, {
+              reply_markup: keyboard,
+            })
+            .then((msg) => msg.message_id),
+        catch: (cause) => new TelegramError({ cause }),
+      }),
+
+    sendRaw: (text, keyboard) =>
+      Effect.tryPromise({
+        try: () =>
+          api
+            .sendMessage(groupChatId, text, {
               reply_markup: keyboard,
             })
             .then((msg) => msg.message_id),

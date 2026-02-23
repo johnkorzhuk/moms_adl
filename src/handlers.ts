@@ -8,8 +8,10 @@ import {
   pairedFinishKeyboard,
   groupDoneKeyboard,
   groupEditTimeKeyboard,
-  groupLogKeyboard,
-  groupLogSubtaskKeyboard,
+  insertKeyboard,
+  insertSubtaskKeyboard,
+  insertStartKeyboard,
+  insertDoneKeyboard,
   MAIN_MENU_TEXT,
 } from "./menu";
 import { EventRepo } from "./services/EventRepo";
@@ -526,7 +528,7 @@ export const handleGroupDelete = (
     }
   });
 
-// ─── Group /log handlers ───
+// ─── Group /insert handlers ───
 
 const deleteMsgSafe = (api: Api, chatId: number, msgId: number) =>
   Effect.tryPromise({
@@ -534,78 +536,144 @@ const deleteMsgSafe = (api: Api, chatId: number, msgId: number) =>
     catch: (cause) => new TelegramError({ cause }),
   }).pipe(Effect.catchTag("TelegramError", () => Effect.void));
 
-/** /log command: show category picker in group. */
-export const handleGroupLog = (api: Api, chatId: number): Effect.Effect<void, Err, Deps> =>
+const kvGet = (kv: KVNamespace, key: string) =>
+  Effect.tryPromise({
+    try: () => kv.get(key),
+    catch: (cause) => new KVError({ cause }),
+  });
+
+const kvPut = (kv: KVNamespace, key: string, value: string) =>
+  Effect.tryPromise({
+    try: () => kv.put(key, value),
+    catch: (cause) => new KVError({ cause }),
+  });
+
+const kvDel = (kv: KVNamespace, key: string) =>
+  Effect.tryPromise({
+    try: () => kv.delete(key),
+    catch: (cause) => new KVError({ cause }),
+  });
+
+interface InsertState {
+  categoryName: string;
+  timestamp?: string;
+}
+
+const notifyRawSafe = (notifier: Notifier["Type"], text: string, keyboard: any) =>
+  notifier.sendRaw(text, keyboard).pipe(
+    Effect.catchTag("TelegramError", (e) =>
+      Effect.sync(() => {
+        console.error("[adl] Group notification failed:", e.cause);
+        return -1;
+      })
+    )
+  );
+
+/** Insert event with custom timestamp/doneAt, send group notification. */
+const insertAndNotify = (categoryName: string, timestamp: string, doneAt: string | null) =>
   Effect.gen(function* () {
-    yield* log("/log in group");
+    const repo = yield* EventRepo;
+    const notifier = yield* Notifier;
+    const menuState = yield* MenuState;
+
+    const status = doneAt ? "done" as const : "open" as const;
+    const eventId = yield* repo.insertAt(categoryName, status, timestamp, doneAt);
+    yield* log(`Inserted event #${eventId}: ${categoryName} (${status})`);
+
+    const startDisplay = new Date(timestamp).toLocaleTimeString("en-US", {
+      hour: "numeric", minute: "2-digit", hour12: true, timeZone: TZ,
+    });
+
+    let notifText: string;
+    let keyboard;
+
+    if (doneAt) {
+      const doneDisplay = new Date(doneAt).toLocaleTimeString("en-US", {
+        hour: "numeric", minute: "2-digit", hour12: true, timeZone: TZ,
+      });
+      notifText = `${categoryName} — ${startDisplay} — Done at ${doneDisplay}`;
+      keyboard = groupEditTimeKeyboard(eventId);
+    } else {
+      notifText = `${categoryName} — ${startDisplay}`;
+      keyboard = groupDoneKeyboard(eventId);
+    }
+
+    const groupMsgId = yield* notifyRawSafe(notifier, notifText, keyboard);
+
+    if (groupMsgId > 0) {
+      yield* menuState.setGroupMsg(eventId, {
+        groupChatId: "",
+        groupMsgId,
+        momChatId: 0,
+        momMenuMsgId: 0,
+        categoryName,
+      });
+    }
+
+    return eventId;
+  });
+
+/** /insert command: show category picker in group. */
+export const handleInsertCommand = (api: Api, chatId: number): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log("/insert in group");
     yield* Effect.tryPromise({
-      try: () => api.sendMessage(chatId, "What to log?", { reply_markup: groupLogKeyboard() }),
+      try: () => api.sendMessage(chatId, "What to log?", { reply_markup: insertKeyboard() }),
       catch: (cause) => new TelegramError({ cause }),
     });
   });
 
-/** Group log: category tapped (single/paired log immediately, subtasks show submenu). */
-export const handleGroupLogCategory = (
-  api: Api,
-  chatId: number,
-  menuMsgId: number,
-  catId: string
+/** Category tapped → show start time options (or subtask submenu). */
+export const handleInsertCategory = (
+  api: Api, chatId: number, menuMsgId: number, catId: string, kv: KVNamespace
 ): Effect.Effect<void, Err, Deps> =>
   Effect.gen(function* () {
     const cat = config.categories[catId];
     if (!cat) return;
 
     if (cat.type === "subtasks") {
-      yield* log(`Group log subtask menu: ${catId}`);
-      yield* editMenu(api, chatId, menuMsgId, cat.label, groupLogSubtaskKeyboard(catId));
+      yield* log(`Insert subtask menu: ${catId}`);
+      yield* editMenu(api, chatId, menuMsgId, cat.name, insertSubtaskKeyboard(catId));
       return;
     }
 
-    yield* log(`Group log: ${cat.name}`);
-    yield* deleteMsgSafe(api, chatId, menuMsgId);
-    yield* logAndNotify(0, 0, cat.name, "open");
+    yield* log(`Insert category: ${cat.name}`);
+    yield* kvPut(kv, `insert:${menuMsgId}`, JSON.stringify({ categoryName: cat.name }));
+    yield* editMenu(api, chatId, menuMsgId, `${cat.name}\nStart time:`, insertStartKeyboard());
   });
 
-/** Group log: subtask tapped. */
-export const handleGroupLogSubtask = (
-  api: Api,
-  chatId: number,
-  menuMsgId: number,
-  catId: string,
-  subtaskIndex: number
+/** Subtask tapped → show start time options. */
+export const handleInsertSubtask = (
+  api: Api, chatId: number, menuMsgId: number, catId: string, subIdx: number, kv: KVNamespace
 ): Effect.Effect<void, Err, Deps> =>
   Effect.gen(function* () {
     const cat = config.categories[catId];
     if (cat.type !== "subtasks") return;
-    const subtask = cat.subtasks[subtaskIndex];
+    const subtask = cat.subtasks[subIdx];
     if (!subtask) return;
 
-    const label = `${cat.name} — ${subtask.name}`;
-    yield* log(`Group log sub: ${label}`);
-    yield* deleteMsgSafe(api, chatId, menuMsgId);
-    yield* logAndNotify(0, 0, label, "open");
+    const categoryName = `${cat.name} — ${subtask.name}`;
+    yield* log(`Insert subtask: ${categoryName}`);
+    yield* kvPut(kv, `insert:${menuMsgId}`, JSON.stringify({ categoryName }));
+    yield* editMenu(api, chatId, menuMsgId, `${categoryName}\nStart time:`, insertStartKeyboard());
   });
 
-/** Group log: back to category list. */
-export const handleGroupLogBack = (
-  api: Api,
-  chatId: number,
-  menuMsgId: number
+/** Back → return to category list (clearing insert state). */
+export const handleInsertBack = (
+  api: Api, chatId: number, menuMsgId: number, kv: KVNamespace
 ): Effect.Effect<void, Err, Deps> =>
   Effect.gen(function* () {
-    yield* log("Group log: back");
-    yield* editMenu(api, chatId, menuMsgId, "What to log?", groupLogKeyboard());
+    yield* log("Insert: back");
+    yield* kvDel(kv, `insert:${menuMsgId}`);
+    yield* editMenu(api, chatId, menuMsgId, "What to log?", insertKeyboard());
   });
 
-/** Group log: custom event — prompt for text. */
-export const handleGroupLogCustom = (
-  api: Api,
-  chatId: number,
-  menuMsgId: number,
-  kv: KVNamespace
+/** Custom event name prompt. */
+export const handleInsertCustomPrompt = (
+  api: Api, chatId: number, menuMsgId: number, kv: KVNamespace
 ): Effect.Effect<void, Err, Deps> =>
   Effect.gen(function* () {
-    yield* log("Group log: custom prompt");
+    yield* log("Insert: custom name prompt");
     yield* deleteMsgSafe(api, chatId, menuMsgId);
 
     const msg = yield* Effect.tryPromise({
@@ -616,21 +684,168 @@ export const handleGroupLogCustom = (
       catch: (cause) => new TelegramError({ cause }),
     });
 
-    yield* Effect.tryPromise({
-      try: () => kv.put(`customevent:${msg.message_id}`, "1"),
-      catch: (cause) => new KVError({ cause }),
-    });
+    yield* kvPut(kv, `insertname:${msg.message_id}`, "1");
   });
 
-/** Group log: handle custom event text reply. */
-export const handleGroupLogCustomReply = (
-  api: Api,
-  chatId: number,
-  eventName: string
+/** Custom event name reply → show start time options. */
+export const handleInsertNameReply = (
+  api: Api, chatId: number, eventName: string, kv: KVNamespace
 ): Effect.Effect<void, Err, Deps> =>
   Effect.gen(function* () {
-    yield* log(`Group log custom: ${eventName}`);
-    yield* logAndNotify(0, 0, eventName, "open");
+    yield* log(`Insert custom name: ${eventName}`);
+
+    const msg = yield* Effect.tryPromise({
+      try: () =>
+        api.sendMessage(chatId, `${eventName}\nStart time:`, {
+          reply_markup: insertStartKeyboard(),
+        }),
+      catch: (cause) => new TelegramError({ cause }),
+    });
+
+    yield* kvPut(kv, `insert:${msg.message_id}`, JSON.stringify({ categoryName: eventName }));
+  });
+
+/** Start: Now → set timestamp, show done options. */
+export const handleInsertStartNow = (
+  api: Api, chatId: number, menuMsgId: number, kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log("Insert: start now");
+    const raw = yield* kvGet(kv, `insert:${menuMsgId}`);
+    if (!raw) return;
+
+    const state: InsertState = JSON.parse(raw);
+    state.timestamp = new Date().toISOString();
+    yield* kvPut(kv, `insert:${menuMsgId}`, JSON.stringify(state));
+
+    const displayTime = formatTime();
+    yield* editMenu(api, chatId, menuMsgId, `${state.categoryName}\nStart: ${displayTime}\nDone:`, insertDoneKeyboard());
+  });
+
+/** Start: Custom → prompt for time. */
+export const handleInsertStartCustom = (
+  api: Api, chatId: number, menuMsgId: number, kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log("Insert: start custom prompt");
+    const raw = yield* kvGet(kv, `insert:${menuMsgId}`);
+    if (!raw) return;
+
+    yield* deleteMsgSafe(api, chatId, menuMsgId);
+
+    const msg = yield* Effect.tryPromise({
+      try: () =>
+        api.sendMessage(chatId, `Reply with the start time (e.g. "2:35 PM"):`, {
+          reply_markup: { force_reply: true, selective: true },
+        }),
+      catch: (cause) => new TelegramError({ cause }),
+    });
+
+    yield* kvPut(kv, `insertstart:${msg.message_id}`, raw);
+    yield* kvDel(kv, `insert:${menuMsgId}`);
+  });
+
+/** Start time reply → show done options. */
+export const handleInsertStartReply = (
+  api: Api, chatId: number, timeText: string, stateJson: string, kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Insert: start time reply: ${timeText}`);
+    const state: InsertState = JSON.parse(stateJson);
+
+    const timestamp = parseTimeToISO(timeText);
+    if (!timestamp) {
+      yield* log(`Failed to parse start time: "${timeText}"`);
+      return;
+    }
+    state.timestamp = timestamp;
+
+    const displayTime = new Date(timestamp).toLocaleTimeString("en-US", {
+      hour: "numeric", minute: "2-digit", hour12: true, timeZone: TZ,
+    });
+
+    const msg = yield* Effect.tryPromise({
+      try: () =>
+        api.sendMessage(chatId, `${state.categoryName}\nStart: ${displayTime}\nDone:`, {
+          reply_markup: insertDoneKeyboard(),
+        }),
+      catch: (cause) => new TelegramError({ cause }),
+    });
+
+    yield* kvPut(kv, `insert:${msg.message_id}`, JSON.stringify(state));
+  });
+
+/** Done: Not Done → insert open event. */
+export const handleInsertDoneNone = (
+  api: Api, chatId: number, menuMsgId: number, kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log("Insert: not done");
+    const raw = yield* kvGet(kv, `insert:${menuMsgId}`);
+    if (!raw) return;
+    const state: InsertState = JSON.parse(raw);
+    if (!state.timestamp) return;
+
+    yield* kvDel(kv, `insert:${menuMsgId}`);
+    yield* deleteMsgSafe(api, chatId, menuMsgId);
+    yield* insertAndNotify(state.categoryName, state.timestamp, null);
+  });
+
+/** Done: Now → insert done event with current time. */
+export const handleInsertDoneNow = (
+  api: Api, chatId: number, menuMsgId: number, kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log("Insert: done now");
+    const raw = yield* kvGet(kv, `insert:${menuMsgId}`);
+    if (!raw) return;
+    const state: InsertState = JSON.parse(raw);
+    if (!state.timestamp) return;
+
+    yield* kvDel(kv, `insert:${menuMsgId}`);
+    yield* deleteMsgSafe(api, chatId, menuMsgId);
+    yield* insertAndNotify(state.categoryName, state.timestamp, new Date().toISOString());
+  });
+
+/** Done: Custom → prompt for done time. */
+export const handleInsertDoneCustom = (
+  api: Api, chatId: number, menuMsgId: number, kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log("Insert: done custom prompt");
+    const raw = yield* kvGet(kv, `insert:${menuMsgId}`);
+    if (!raw) return;
+
+    yield* deleteMsgSafe(api, chatId, menuMsgId);
+
+    const msg = yield* Effect.tryPromise({
+      try: () =>
+        api.sendMessage(chatId, `Reply with the done time (e.g. "2:45 PM"):`, {
+          reply_markup: { force_reply: true, selective: true },
+        }),
+      catch: (cause) => new TelegramError({ cause }),
+    });
+
+    yield* kvPut(kv, `insertdone:${msg.message_id}`, raw);
+    yield* kvDel(kv, `insert:${menuMsgId}`);
+  });
+
+/** Done time reply → insert done event. */
+export const handleInsertDoneReply = (
+  api: Api, chatId: number, timeText: string, stateJson: string
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Insert: done time reply: ${timeText}`);
+    const state: InsertState = JSON.parse(stateJson);
+    if (!state.timestamp) return;
+
+    const doneAt = parseTimeToISO(timeText, state.timestamp);
+    if (!doneAt) {
+      yield* log(`Failed to parse done time: "${timeText}"`);
+      return;
+    }
+
+    yield* insertAndNotify(state.categoryName, state.timestamp, doneAt);
   });
 
 // ─── Group /edit handlers ───
@@ -659,14 +874,23 @@ const buildEditPageContent = (events: EventRow[], offset: number, hasMore: boole
   }
 
   for (const event of display) {
-    const time = new Date(event.timestamp).toLocaleTimeString("en-US", {
+    const startTime = new Date(event.timestamp).toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
       timeZone: TZ,
     });
-    const status = event.status === "done" ? " ✅" : "";
-    kb.text(`${event.category} — ${time}${status}`, `es:${event.id}:${offset}`).row();
+    let label = `${event.category} — ${startTime}`;
+    if (event.status === "done" && event.done_at) {
+      const doneTime = new Date(event.done_at).toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: TZ,
+      });
+      label += ` → ${doneTime} ✅`;
+    }
+    kb.text(label, `es:${event.id}:${offset}`).row();
   }
 
   if (offset > 0) {

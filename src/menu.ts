@@ -48,23 +48,40 @@ export function groupEditTimeKeyboard(eventId: number): InlineKeyboard {
     .row();
 }
 
-export function groupLogKeyboard(): InlineKeyboard {
+export function insertKeyboard(): InlineKeyboard {
   const kb = new InlineKeyboard();
   for (const [id, cat] of Object.entries(config.categories)) {
-    kb.text(cat.name, `gcat:${id}`).row();
+    kb.text(cat.name, `icat:${id}`).row();
   }
-  kb.text("✏️ Custom", "gcustom").row();
+  kb.text("✏️ Custom", "icust").row();
   return kb;
 }
 
-export function groupLogSubtaskKeyboard(categoryId: string): InlineKeyboard {
+export function insertSubtaskKeyboard(categoryId: string): InlineKeyboard {
   const cat = config.categories[categoryId];
   if (cat.type !== "subtasks") throw new Error(`Not a subtask category: ${categoryId}`);
 
   const kb = new InlineKeyboard();
-  kb.text("⬅️ Back", "gback").row();
+  kb.text("⬅️ Back", "iback").row();
   for (let i = 0; i < cat.subtasks.length; i++) {
-    kb.text(cat.subtasks[i].name, `gsub:${categoryId}:${i}`).row();
+    kb.text(cat.subtasks[i].name, `isub:${categoryId}:${i}`).row();
   }
   return kb;
+}
+
+export function insertStartKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("⏱️ Now", "istnow")
+    .text("🕐 Custom", "istcust")
+    .row()
+    .text("⬅️ Back", "iback")
+    .row();
+}
+
+export function insertDoneKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("⏭️ Not Done", "idnone")
+    .text("✅ Now", "idnow")
+    .text("🕐 Custom", "idcust")
+    .row();
 }

@@ -19,12 +19,19 @@ import {
   handleGroupStartTimeReply,
   handleGroupDelete,
 
-  handleGroupLog,
-  handleGroupLogCategory,
-  handleGroupLogSubtask,
-  handleGroupLogBack,
-  handleGroupLogCustom,
-  handleGroupLogCustomReply,
+  handleInsertCommand,
+  handleInsertCategory,
+  handleInsertSubtask,
+  handleInsertBack,
+  handleInsertCustomPrompt,
+  handleInsertNameReply,
+  handleInsertStartNow,
+  handleInsertStartCustom,
+  handleInsertStartReply,
+  handleInsertDoneNone,
+  handleInsertDoneNow,
+  handleInsertDoneCustom,
+  handleInsertDoneReply,
 
   handleEditCommand,
   handleEditPage,
@@ -76,11 +83,11 @@ export function createBot(env: Env): Bot {
     return run(ctx.api, handleExport(ctx.api, ctx.chat.id));
   });
 
-  // ─── Group /log command ───
+  // ─── Group /insert command ───
 
-  bot.command("log", (ctx) => {
+  bot.command("insert", (ctx) => {
     if (String(ctx.chat.id) !== env.GROUP_CHAT_ID) return;
-    return run(ctx.api, handleGroupLog(ctx.api, ctx.chat.id));
+    return run(ctx.api, handleInsertCommand(ctx.api, ctx.chat.id));
   });
 
   bot.command("edit", (ctx) => {
@@ -122,31 +129,61 @@ export function createBot(env: Env): Bot {
       return run(ctx.api, handleGroupDelete(eventId));
     }
 
-    // ── Group /log callbacks ──
-    if (data.startsWith("gcat:")) {
+    // ── /insert callbacks ──
+    if (data.startsWith("icat:")) {
       const catId = data.slice(5);
       const msgId = ctx.callbackQuery.message?.message_id;
       if (!msgId) return;
-      return run(ctx.api, handleGroupLogCategory(ctx.api, chatId, msgId, catId));
+      return run(ctx.api, handleInsertCategory(ctx.api, chatId, msgId, catId, env.KV));
     }
 
-    if (data.startsWith("gsub:")) {
+    if (data.startsWith("isub:")) {
       const [, catId, indexStr] = data.split(":");
       const msgId = ctx.callbackQuery.message?.message_id;
       if (!msgId) return;
-      return run(ctx.api, handleGroupLogSubtask(ctx.api, chatId, msgId, catId, Number(indexStr)));
+      return run(ctx.api, handleInsertSubtask(ctx.api, chatId, msgId, catId, Number(indexStr), env.KV));
     }
 
-    if (data === "gback") {
+    if (data === "iback") {
       const msgId = ctx.callbackQuery.message?.message_id;
       if (!msgId) return;
-      return run(ctx.api, handleGroupLogBack(ctx.api, chatId, msgId));
+      return run(ctx.api, handleInsertBack(ctx.api, chatId, msgId, env.KV));
     }
 
-    if (data === "gcustom") {
+    if (data === "icust") {
       const msgId = ctx.callbackQuery.message?.message_id;
       if (!msgId) return;
-      return run(ctx.api, handleGroupLogCustom(ctx.api, chatId, msgId, env.KV));
+      return run(ctx.api, handleInsertCustomPrompt(ctx.api, chatId, msgId, env.KV));
+    }
+
+    if (data === "istnow") {
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleInsertStartNow(ctx.api, chatId, msgId, env.KV));
+    }
+
+    if (data === "istcust") {
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleInsertStartCustom(ctx.api, chatId, msgId, env.KV));
+    }
+
+    if (data === "idnone") {
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleInsertDoneNone(ctx.api, chatId, msgId, env.KV));
+    }
+
+    if (data === "idnow") {
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleInsertDoneNow(ctx.api, chatId, msgId, env.KV));
+    }
+
+    if (data === "idcust") {
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleInsertDoneCustom(ctx.api, chatId, msgId, env.KV));
     }
 
     // ── /edit callbacks (manager only) ──
@@ -276,12 +313,30 @@ export function createBot(env: Env): Bot {
       return;
     }
 
+    // Check if this is a reply to our insert start time prompt
+    const insertStartState = await env.KV.get(`insertstart:${replyTo.message_id}`);
+    if (insertStartState) {
+      console.log(`[adl] Insert start time reply: ${msg.text}`);
+      await env.KV.delete(`insertstart:${replyTo.message_id}`);
+      await run(ctx.api, handleInsertStartReply(ctx.api, ctx.chat.id, msg.text, insertStartState, env.KV));
+      return;
+    }
+
+    // Check if this is a reply to our insert done time prompt
+    const insertDoneState = await env.KV.get(`insertdone:${replyTo.message_id}`);
+    if (insertDoneState) {
+      console.log(`[adl] Insert done time reply: ${msg.text}`);
+      await env.KV.delete(`insertdone:${replyTo.message_id}`);
+      await run(ctx.api, handleInsertDoneReply(ctx.api, ctx.chat.id, msg.text, insertDoneState));
+      return;
+    }
+
     // Check if this is a reply to our custom event name prompt
-    const customEventFlag = await env.KV.get(`customevent:${replyTo.message_id}`);
-    if (customEventFlag) {
-      console.log(`[adl] Custom event reply: ${msg.text}`);
-      await env.KV.delete(`customevent:${replyTo.message_id}`);
-      await run(ctx.api, handleGroupLogCustomReply(ctx.api, ctx.chat.id, msg.text));
+    const insertNameFlag = await env.KV.get(`insertname:${replyTo.message_id}`);
+    if (insertNameFlag) {
+      console.log(`[adl] Insert custom name reply: ${msg.text}`);
+      await env.KV.delete(`insertname:${replyTo.message_id}`);
+      await run(ctx.api, handleInsertNameReply(ctx.api, ctx.chat.id, msg.text, env.KV));
       return;
     }
   });

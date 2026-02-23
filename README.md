@@ -2,7 +2,7 @@
 
 Telegram bot for tracking Activities of Daily Living, deployed on Cloudflare Workers.
 
-Mom interacts with a persistent inline-keyboard menu (Ukrainian UI) in a private chat. You receive notifications in a shared Telegram group with Done/Custom Time controls. You can also log events directly from the group chat.
+Mom interacts with a persistent inline-keyboard menu (Ukrainian UI) in a private chat. You receive notifications in a shared Telegram group with Done/Custom Time controls. You can also insert events directly from the group chat with custom timestamps.
 
 ## Stack
 
@@ -10,7 +10,7 @@ Mom interacts with a persistent inline-keyboard menu (Ukrainian UI) in a private
 - **Effect** — Typed errors, services, dependency injection
 - **Cloudflare Workers** — Serverless runtime
 - **Cloudflare D1** — SQLite database for the event log (with status tracking)
-- **Cloudflare KV** — Menu state, group message mappings, paired sessions
+- **Cloudflare KV** — Menu state, group message mappings, paired sessions, insert wizard state
 
 ## Prerequisites
 
@@ -49,11 +49,13 @@ Copy the output IDs into `wrangler.toml`:
 pnpm wrangler secret put BOT_TOKEN
 pnpm wrangler secret put GROUP_CHAT_ID
 pnpm wrangler secret put USER_ID
+pnpm wrangler secret put MANAGER_ID
 ```
 
 - `BOT_TOKEN` — Telegram bot token from BotFather
 - `GROUP_CHAT_ID` — Chat ID of your notification group (negative number like `-5128384833`)
 - `USER_ID` — Mom's Telegram user ID (restricts bot interaction to her only)
+- `MANAGER_ID` — Manager's Telegram user ID (can use the bot, /edit, /insert, /export)
 
 ### 4. Deploy
 
@@ -77,13 +79,17 @@ This runs the D1 migrations and registers the Telegram webhook.
 - Tap buttons to log activities
 - Paired activities (Toilet, Bed, Transfer) show a finish button to mark completion
 
-### Group chat (for you)
+### Group chat
 
-- Notifications appear with **Done** and **Custom Time** buttons
+- Notifications appear with **Done**, **Custom Time**, and **Delete** buttons
 - **Done** — Marks the event complete with the current time
 - **Custom Time** — Reply with a time like `2:35 PM` to set a specific completion time
-- **Edit Time** — Appears after marking done, lets you correct the time
-- `/log` — Log events directly from the group with preset categories or custom text
+- After marking done: **Edit Start**, **Edit Done**, and **Delete** buttons
+- `/insert` — Insert events with a multi-step wizard:
+  1. Pick a category (or type a custom event name)
+  2. Choose start time: **Now** or **Custom** (reply with time)
+  3. Choose done status: **Not Done**, **Done Now**, or **Custom** done time
+- `/edit` — (Manager only) Browse all events in a paginated list, edit start/done times, or delete
 - `/export` — Get a CSV of all logged events
 
 ## Category Types
