@@ -7,6 +7,7 @@ import {
   subtaskKeyboard,
   pairedFinishKeyboard,
   groupDoneKeyboard,
+  groupEditTimeKeyboard,
   MAIN_MENU_TEXT,
 } from "./menu";
 import { EventRepo } from "./services/EventRepo";
@@ -32,15 +33,9 @@ function formatTime(): string {
   });
 }
 
-/**
- * Parse a human time string like "2:35 PM", "14:35", "2:35pm"
- * and return a full ISO 8601 timestamp using today's date in the configured timezone.
- * Returns null if parsing fails.
- */
 function parseTimeToISO(input: string): string | null {
   const trimmed = input.trim().toUpperCase();
 
-  // Try 12-hour: "2:35 PM", "2:35PM", "2:35 pm"
   const match12 = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/);
   if (match12) {
     let hours = Number(match12[1]);
@@ -52,7 +47,6 @@ function parseTimeToISO(input: string): string | null {
     return buildISO(hours, minutes);
   }
 
-  // Try 24-hour: "14:35"
   const match24 = trimmed.match(/^(\d{1,2}):(\d{2})$/);
   if (match24) {
     const hours = Number(match24[1]);
@@ -65,15 +59,11 @@ function parseTimeToISO(input: string): string | null {
 }
 
 function buildISO(hours: number, minutes: number): string {
-  // Get today's date in the configured timezone
   const now = new Date();
-  const dateStr = now.toLocaleDateString("en-CA", { timeZone: TZ }); // YYYY-MM-DD
+  const dateStr = now.toLocaleDateString("en-CA", { timeZone: TZ });
   const hh = String(hours).padStart(2, "0");
   const mm = String(minutes).padStart(2, "0");
-  // Build a Date from the local timezone components
   const d = new Date(`${dateStr}T${hh}:${mm}:00`);
-  // Adjust: the above is parsed as local (UTC in Workers), so offset to the real TZ
-  // Workers run in UTC, so we need the TZ offset
   const utcNow = new Date(now.toLocaleString("en-US", { timeZone: "UTC" }));
   const tzNow = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
   const offsetMs = utcNow.getTime() - tzNow.getTime();
@@ -95,7 +85,7 @@ const editMenu = (
     catch: (cause) => new TelegramError({ cause }),
   });
 
-/** Notify group but don't let failure break the handler. Returns message ID or -1. */
+/** Notify group safely. Returns group message ID or -1 on failure. */
 const notifySafe = (notifier: Notifier["Type"], text: string, keyboard: any) =>
   notifier.send(text, keyboard).pipe(
     Effect.catchTag("TelegramError", (e) =>
@@ -106,7 +96,15 @@ const notifySafe = (notifier: Notifier["Type"], text: string, keyboard: any) =>
     )
   );
 
-/** Log event, notify group with done buttons, store group msg info in KV. */
+/** Edit group message safely (don't let failure break the handler). */
+const editGroupMsgSafe = (notifier: Notifier["Type"], msgId: number, text: string, keyboard?: any) =>
+  notifier.editGroupMsg(msgId, text, keyboard).pipe(
+    Effect.catchTag("TelegramError", (e) =>
+      Effect.sync(() => console.error("[adl] Failed to edit group msg:", e.cause))
+    )
+  );
+
+/** Log event in D1, send group notification with Done/Custom Time buttons, store mapping in KV. */
 const logAndNotify = (
   momChatId: number,
   momMenuMsgId: number,
@@ -134,6 +132,56 @@ const logAndNotify = (
     }
 
     return eventId;
+  });
+
+/**
+ * Mark an event done and update its group message to show "Done at TIME" with an Edit Time button.
+ * Optionally resets mom's paired session if applicable.
+ */
+const markDoneAndUpdateGroup = (
+  api: Api,
+  eventId: number,
+  doneTime: string,
+  displayTime: string
+) =>
+  Effect.gen(function* () {
+    const repo = yield* EventRepo;
+    const menuState = yield* MenuState;
+    const notifier = yield* Notifier;
+
+    yield* repo.markDone(eventId, doneTime);
+
+    const groupInfo = yield* menuState.getGroupMsg(eventId);
+    if (!groupInfo) {
+      yield* log(`No group msg info for event #${eventId}`);
+      return;
+    }
+
+    yield* editGroupMsgSafe(
+      notifier,
+      groupInfo.groupMsgId,
+      `${groupInfo.categoryName} — Done at ${displayTime}`,
+      groupEditTimeKeyboard(eventId)
+    );
+
+    // If mom has active paired session for this event, return her to main menu
+    const paired = yield* menuState.getPaired(groupInfo.momChatId);
+    if (paired && paired.eventId === eventId) {
+      yield* editMenu(
+        api,
+        groupInfo.momChatId,
+        groupInfo.momMenuMsgId,
+        MAIN_MENU_TEXT,
+        mainMenuKeyboard()
+      ).pipe(
+        Effect.catchTag("TelegramError", (e) =>
+          Effect.sync(() => console.error("[adl] Failed to reset mom's menu:", e.cause))
+        )
+      );
+      yield* menuState.deletePaired(groupInfo.momChatId);
+    }
+
+    // Keep the KV entry alive so Edit Time can still find the group message
   });
 
 // ─── Mom's private chat handlers ───
@@ -219,7 +267,7 @@ export const handlePairedStart = (
     yield* editMenu(api, chatId, msgId, cat.label, pairedFinishKeyboard(catId));
   });
 
-/** Paired finish: log done event, update group message, return to menu. */
+/** Paired finish: mark original event done, update group message, return to menu. */
 export const handlePairedFinish = (
   api: Api,
   chatId: number,
@@ -233,30 +281,16 @@ export const handlePairedFinish = (
 
     const repo = yield* EventRepo;
     const menuState = yield* MenuState;
-    const notifier = yield* Notifier;
 
     const session = yield* menuState.getPaired(chatId);
     if (!session) return;
 
-    // Log the finish as a done event
-    yield* logAndNotify(chatId, msgId, cat.finish_name, "done");
+    // Log the finish as a separate done event in D1 (no group notification for this one)
+    yield* repo.insert(cat.finish_name, "done");
 
-    // Mark the original start event as done too
+    // Mark the original start event as done and update its group message
     const doneTime = formatTime();
-    yield* repo.markDone(session.eventId, new Date().toISOString());
-
-    // Update the original group notification
-    const groupInfo = yield* menuState.getGroupMsg(session.eventId);
-    if (groupInfo) {
-      yield* notifier
-        .editGroupMsg(groupInfo.groupMsgId, `${groupInfo.categoryName} — Done at ${doneTime}`)
-        .pipe(
-          Effect.catchTag("TelegramError", (e) =>
-            Effect.sync(() => console.error("[adl] Failed to edit group msg:", e.cause))
-          )
-        );
-      yield* menuState.deleteGroupMsg(session.eventId);
-    }
+    yield* markDoneAndUpdateGroup(api, session.eventId, new Date().toISOString(), doneTime);
 
     yield* menuState.deletePaired(chatId);
     yield* editMenu(api, chatId, msgId, "✅ Записано", mainMenuKeyboard());
@@ -315,45 +349,11 @@ export const handleBack = (
 export const handleGroupDone = (api: Api, eventId: number): Effect.Effect<void, Err, Deps> =>
   Effect.gen(function* () {
     yield* log(`Group done: event #${eventId}`);
-    const repo = yield* EventRepo;
-    const menuState = yield* MenuState;
-    const notifier = yield* Notifier;
-
     const doneTime = formatTime();
-    yield* repo.markDone(eventId, new Date().toISOString());
-
-    const groupInfo = yield* menuState.getGroupMsg(eventId);
-    if (!groupInfo) return;
-
-    yield* notifier
-      .editGroupMsg(groupInfo.groupMsgId, `${groupInfo.categoryName} — Done at ${doneTime}`)
-      .pipe(
-        Effect.catchTag("TelegramError", (e) =>
-          Effect.sync(() => console.error("[adl] Failed to edit group msg:", e.cause))
-        )
-      );
-
-    // If mom has active paired session for this event, return her to main menu
-    const paired = yield* menuState.getPaired(groupInfo.momChatId);
-    if (paired && paired.eventId === eventId) {
-      yield* editMenu(
-        api,
-        groupInfo.momChatId,
-        groupInfo.momMenuMsgId,
-        MAIN_MENU_TEXT,
-        mainMenuKeyboard()
-      ).pipe(
-        Effect.catchTag("TelegramError", (e) =>
-          Effect.sync(() => console.error("[adl] Failed to reset mom's menu:", e.cause))
-        )
-      );
-      yield* menuState.deletePaired(groupInfo.momChatId);
-    }
-
-    yield* menuState.deleteGroupMsg(eventId);
+    yield* markDoneAndUpdateGroup(api, eventId, new Date().toISOString(), doneTime);
   });
 
-/** Custom time: ask for time, store pending request in KV. */
+/** Custom time / Edit time: ask for time input, store pending request in KV. */
 export const handleGroupCustomTime = (
   eventId: number,
   groupMsgId: number,
@@ -365,7 +365,6 @@ export const handleGroupCustomTime = (
 
     const botMsgId = yield* notifier.askCustomTime(groupMsgId);
 
-    // Store mapping: bot's reply message ID → eventId
     yield* Effect.tryPromise({
       try: () => kv.put(`customtime:${botMsgId}`, String(eventId)),
       catch: (cause) => new KVError({ cause }),
@@ -380,7 +379,6 @@ export const handleGroupTimeReply = (
 ): Effect.Effect<void, Err, Deps> =>
   Effect.gen(function* () {
     yield* log(`Group time reply: event #${eventId}, time: ${timeText}`);
-    const repo = yield* EventRepo;
     const menuState = yield* MenuState;
     const notifier = yield* Notifier;
 
@@ -388,7 +386,6 @@ export const handleGroupTimeReply = (
     if (!timestamp) {
       yield* log(`Failed to parse time: "${timeText}"`);
     }
-    yield* repo.markDone(eventId, timestamp ?? timeText);
 
     const displayTime = timestamp
       ? new Date(timestamp).toLocaleTimeString("en-US", {
@@ -399,33 +396,5 @@ export const handleGroupTimeReply = (
         })
       : timeText;
 
-    const groupInfo = yield* menuState.getGroupMsg(eventId);
-    if (!groupInfo) return;
-
-    yield* notifier
-      .editGroupMsg(groupInfo.groupMsgId, `${groupInfo.categoryName} — Done at ${displayTime}`)
-      .pipe(
-        Effect.catchTag("TelegramError", (e) =>
-          Effect.sync(() => console.error("[adl] Failed to edit group msg:", e.cause))
-        )
-      );
-
-    // If mom has active paired session for this event, return her to main menu
-    const paired = yield* menuState.getPaired(groupInfo.momChatId);
-    if (paired && paired.eventId === eventId) {
-      yield* editMenu(
-        api,
-        groupInfo.momChatId,
-        groupInfo.momMenuMsgId,
-        MAIN_MENU_TEXT,
-        mainMenuKeyboard()
-      ).pipe(
-        Effect.catchTag("TelegramError", (e) =>
-          Effect.sync(() => console.error("[adl] Failed to reset mom's menu:", e.cause))
-        )
-      );
-      yield* menuState.deletePaired(groupInfo.momChatId);
-    }
-
-    yield* menuState.deleteGroupMsg(eventId);
+    yield* markDoneAndUpdateGroup(api, eventId, timestamp ?? timeText, displayTime);
   });

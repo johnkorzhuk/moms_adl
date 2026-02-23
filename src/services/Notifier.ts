@@ -19,10 +19,11 @@ export class Notifier extends Context.Tag("Notifier")<
       text: string,
       keyboard: InlineKeyboard
     ) => Effect.Effect<number, TelegramError>;
-    /** Edit a group message's text and remove keyboard. */
+    /** Edit a group message's text, optionally with a new keyboard. */
     readonly editGroupMsg: (
       msgId: number,
-      text: string
+      text: string,
+      keyboard?: InlineKeyboard
     ) => Effect.Effect<void, TelegramError>;
     /** Reply to a group message asking for custom time. Returns the bot's message ID. */
     readonly askCustomTime: (
@@ -44,12 +45,12 @@ export const NotifierLive = (api: Api, groupChatId: string) =>
         catch: (cause) => new TelegramError({ cause }),
       }),
 
-    editGroupMsg: (msgId, text) =>
+    editGroupMsg: (msgId, text, keyboard) =>
       Effect.tryPromise({
         try: () =>
           api
             .editMessageText(groupChatId, msgId, text, {
-              reply_markup: { inline_keyboard: [] },
+              reply_markup: keyboard ?? { inline_keyboard: [] },
             })
             .then(() => undefined),
         catch: (cause) => new TelegramError({ cause }),

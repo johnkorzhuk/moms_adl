@@ -54,9 +54,7 @@ export const config: Config = {
       label: "💊 Ліки",
       name: "Medication",
       subtasks: [
-        { label: "Ранкові", name: "Morning Meds" },
-        { label: "Обідні", name: "Afternoon Meds" },
-        { label: "Вечірні", name: "Evening Meds" },
+        { label: "Прийняла", name: "Took Meds" },
         { label: "Розкласти ліки", name: "Sort Meds" },
         { label: "Аптека", name: "Pharmacy Pickup" },
       ],

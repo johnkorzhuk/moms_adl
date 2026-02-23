@@ -36,3 +36,9 @@ export function groupDoneKeyboard(eventId: number): InlineKeyboard {
     .text("🕐 Custom Time", `customtime:${eventId}`)
     .row();
 }
+
+export function groupEditTimeKeyboard(eventId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("✏️ Edit Time", `customtime:${eventId}`)
+    .row();
+}
