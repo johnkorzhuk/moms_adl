@@ -213,6 +213,35 @@ const logAndNotify = (
     return eventId;
   });
 
+/** Build group message text for an event. */
+function buildGroupText(event: EventRow, categoryName: string): string {
+  const startDisplay = new Date(event.timestamp).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: TZ,
+  });
+
+  let text: string;
+  if (event.status === "done" && event.done_at) {
+    const doneDisplay = new Date(event.done_at).toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: TZ,
+    });
+    text = `${categoryName} — ${startDisplay} — Done at ${doneDisplay}`;
+  } else {
+    text = `${categoryName} — ${startDisplay}`;
+  }
+
+  if (event.notes) {
+    text += `\n📝 ${event.notes}`;
+  }
+
+  return text;
+}
+
 /**
  * Mark an event done and update its group message to show "Done at TIME" with an Edit Time button.
  * Optionally resets mom's paired session if applicable.
@@ -236,24 +265,16 @@ const markDoneAndUpdateGroup = (
       return;
     }
 
-    // Fetch the event to get its start time for display
+    // Fetch the event to build group message text (includes notes if any)
     const event = yield* repo.get(eventId);
-    const startDisplay = event
-      ? new Date(event.timestamp).toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-          timeZone: TZ,
-        })
-      : null;
-    const prefix = startDisplay
-      ? `${groupInfo.categoryName} — ${startDisplay}`
-      : groupInfo.categoryName;
+    const groupText = event
+      ? buildGroupText(event, groupInfo.categoryName)
+      : `${groupInfo.categoryName} — Done at ${displayTime}`;
 
     yield* editGroupMsgSafe(
       notifier,
       groupInfo.groupMsgId,
-      `${prefix} — Done at ${displayTime}`,
+      groupText,
       groupEditTimeKeyboard(eventId)
     );
 
@@ -307,10 +328,10 @@ export const handleExport = (api: Api, chatId: number): Effect.Effect<void, Err,
     }
 
     const csv = [
-      "timestamp,category,status,done_at",
+      "timestamp,category,status,done_at,notes",
       ...rows.map(
         (r) =>
-          `${r.timestamp},"${r.category}",${r.status},${r.done_at ?? ""}`
+          `${r.timestamp},"${r.category}",${r.status},${r.done_at ?? ""},"${(r.notes ?? "").replace(/"/g, '""')}"`
       ),
     ].join("\n");
 
@@ -538,38 +559,17 @@ export const handleGroupStartTimeReply = (
 
     yield* repo.updateTimestamp(eventId, timestamp);
 
-    const displayStart = new Date(timestamp).toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-      timeZone: TZ,
-    });
-
     const groupInfo = yield* menuState.getGroupMsg(eventId);
     if (!groupInfo) return;
 
-    // Rebuild the group message text with updated start time
+    // Rebuild the group message text with updated start time (includes notes)
     const updatedEvent = yield* repo.get(eventId);
-    if (updatedEvent?.status === "done" && updatedEvent.done_at) {
-      const displayDone = new Date(updatedEvent.done_at).toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-        timeZone: TZ,
-      });
-      yield* editGroupMsgSafe(
-        notifier,
-        groupInfo.groupMsgId,
-        `${groupInfo.categoryName} — ${displayStart} — Done at ${displayDone}`,
-        groupEditTimeKeyboard(eventId)
-      );
-    } else {
-      yield* editGroupMsgSafe(
-        notifier,
-        groupInfo.groupMsgId,
-        `${groupInfo.categoryName} — ${displayStart}`,
-        groupDoneKeyboard(eventId)
-      );
+    if (updatedEvent) {
+      const groupText = buildGroupText(updatedEvent, groupInfo.categoryName);
+      const keyboard = updatedEvent.status === "done"
+        ? groupEditTimeKeyboard(eventId)
+        : groupDoneKeyboard(eventId);
+      yield* editGroupMsgSafe(notifier, groupInfo.groupMsgId, groupText, keyboard);
     }
   });
 
@@ -959,6 +959,9 @@ const buildEditPageContent = (events: EventRow[], offset: number, hasMore: boole
       });
       label += ` → ${doneTime} ✅`;
     }
+    if (event.notes) {
+      label += ` 📝`;
+    }
     kb.text(label, `es:${event.id}:${offset}`).row();
   }
 
@@ -1034,12 +1037,17 @@ export const handleEditSelect = (
       text += "\nStatus: Open";
     }
 
+    if (event.notes) {
+      text += `\n📝 ${event.notes}`;
+    }
+
     const kb = new InlineKeyboard();
     kb.text("✏️ Edit Start", `est:${eventId}`);
     if (event.status === "done") {
       kb.text("✏️ Edit Done", `edt:${eventId}`);
     }
     kb.row();
+    kb.text("📝 Notes", `en:${eventId}:${offset}`);
     kb.text("🗑️ Delete", `edl:${eventId}:${offset}`).row();
     kb.text("⬅️ Back", `eb:${offset}`).row();
 
@@ -1095,6 +1103,69 @@ export const handleEditDoneFromList = (
     yield* Effect.tryPromise({
       try: () => kv.put(`customtime:${msg.message_id}`, String(eventId)),
       catch: (cause) => new KVError({ cause }),
+    });
+  });
+
+/** Edit notes from /edit menu — prompt for note via force_reply. */
+export const handleEditNotesFromList = (
+  api: Api,
+  chatId: number,
+  menuMsgId: number,
+  eventId: number,
+  offset: number,
+  kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Edit notes from list: event #${eventId}`);
+    yield* deleteMsgSafe(api, chatId, menuMsgId);
+
+    const msg = yield* Effect.tryPromise({
+      try: () =>
+        api.sendMessage(chatId, "Reply with a note:", {
+          reply_markup: { force_reply: true },
+        }),
+      catch: (cause) => new TelegramError({ cause }),
+    });
+
+    yield* kvPut(kv, `editnotes:${msg.message_id}`, `${eventId}:${offset}`);
+  });
+
+/** Handle text reply with notes content. */
+export const handleEditNotesReply = (
+  api: Api,
+  chatId: number,
+  notesText: string,
+  eventId: number,
+  offset: number
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Edit notes reply: event #${eventId}, notes: ${notesText}`);
+    const repo = yield* EventRepo;
+    const notifier = yield* Notifier;
+    const menuState = yield* MenuState;
+
+    yield* repo.updateNotes(eventId, notesText);
+
+    // Update group message if it exists
+    const event = yield* repo.get(eventId);
+    const groupInfo = yield* menuState.getGroupMsg(eventId);
+    if (event && groupInfo) {
+      const groupText = buildGroupText(event, groupInfo.categoryName);
+      const keyboard = event.status === "done"
+        ? groupEditTimeKeyboard(eventId)
+        : groupDoneKeyboard(eventId);
+      yield* editGroupMsgSafe(notifier, groupInfo.groupMsgId, groupText, keyboard);
+    }
+
+    // Refresh the edit page
+    const events = yield* repo.listPage(offset, EDIT_PAGE_SIZE + 1);
+    const hasMore = events.length > EDIT_PAGE_SIZE;
+    const { text, keyboard: kb } = buildEditPageContent(events, offset, hasMore);
+
+    yield* Effect.tryPromise({
+      try: () =>
+        api.sendMessage(chatId, text, { reply_markup: kb }),
+      catch: (cause) => new TelegramError({ cause }),
     });
   });
 

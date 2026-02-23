@@ -42,4 +42,5 @@ export interface EventRow {
   category: string;
   status: string;
   done_at: string | null;
+  notes: string | null;
 }

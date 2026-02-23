@@ -23,6 +23,10 @@ export class EventRepo extends Context.Tag("EventRepo")<
       id: number,
       timestamp: string
     ) => Effect.Effect<void, D1Error>;
+    readonly updateNotes: (
+      id: number,
+      notes: string
+    ) => Effect.Effect<void, D1Error>;
     readonly deleteEvent: (id: number) => Effect.Effect<void, D1Error>;
     readonly listPage: (
       offset: number,
@@ -87,6 +91,17 @@ export const EventRepoLive = (db: D1Database) =>
         catch: (cause) => new D1Error({ cause }),
       }),
 
+    updateNotes: (id, notes) =>
+      Effect.tryPromise({
+        try: () =>
+          db
+            .prepare("UPDATE events SET notes = ? WHERE id = ?")
+            .bind(notes, id)
+            .run()
+            .then(() => undefined),
+        catch: (cause) => new D1Error({ cause }),
+      }),
+
     deleteEvent: (id) =>
       Effect.tryPromise({
         try: () =>
@@ -103,7 +118,7 @@ export const EventRepoLive = (db: D1Database) =>
         try: () =>
           db
             .prepare(
-              "SELECT id, timestamp, category, status, done_at FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+              "SELECT id, timestamp, category, status, done_at, notes FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?"
             )
             .bind(limit, offset)
             .all<EventRow>()
@@ -116,7 +131,7 @@ export const EventRepoLive = (db: D1Database) =>
         try: () =>
           db
             .prepare(
-              "SELECT id, timestamp, category, status, done_at FROM events WHERE id = ?"
+              "SELECT id, timestamp, category, status, done_at, notes FROM events WHERE id = ?"
             )
             .bind(id)
             .first<EventRow>(),
@@ -128,7 +143,7 @@ export const EventRepoLive = (db: D1Database) =>
         try: () =>
           db
             .prepare(
-              "SELECT id, timestamp, category, status, done_at FROM events ORDER BY timestamp ASC"
+              "SELECT id, timestamp, category, status, done_at, notes FROM events ORDER BY timestamp ASC"
             )
             .all<EventRow>()
             .then((r) => r.results),

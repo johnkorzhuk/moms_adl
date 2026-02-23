@@ -38,6 +38,8 @@ import {
   handleEditSelect,
   handleEditStartFromList,
   handleEditDoneFromList,
+  handleEditNotesFromList,
+  handleEditNotesReply,
   handleEditDeleteFromList,
 } from "./handlers";
 import { EventRepo, EventRepoLive } from "./services/EventRepo";
@@ -219,6 +221,14 @@ export function createBot(env: Env): Bot {
       return run(ctx.api, handleEditDoneFromList(ctx.api, chatId, msgId, eventId, env.KV));
     }
 
+    if (data.startsWith("en:")) {
+      if (!isManager(ctx.callbackQuery.from.id)) return;
+      const [, eventIdStr, offsetStr] = data.split(":");
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleEditNotesFromList(ctx.api, chatId, msgId, Number(eventIdStr), Number(offsetStr), env.KV));
+    }
+
     if (data.startsWith("edl:")) {
       if (!isManager(ctx.callbackQuery.from.id)) return;
       const [, eventIdStr, offsetStr] = data.split(":");
@@ -328,6 +338,16 @@ export function createBot(env: Env): Bot {
       console.log(`[adl] Insert done time reply: ${msg.text}`);
       await env.KV.delete(`insertdone:${replyTo.message_id}`);
       await run(ctx.api, handleInsertDoneReply(ctx.api, ctx.chat.id, msg.text, insertDoneState));
+      return;
+    }
+
+    // Check if this is a reply to our "edit notes" prompt
+    const editNotesStr = await env.KV.get(`editnotes:${replyTo.message_id}`);
+    if (editNotesStr) {
+      const [eventIdStr, offsetStr] = editNotesStr.split(":");
+      console.log(`[adl] Edit notes reply for event #${eventIdStr}: ${msg.text}`);
+      await env.KV.delete(`editnotes:${replyTo.message_id}`);
+      await run(ctx.api, handleEditNotesReply(ctx.api, ctx.chat.id, msg.text, Number(eventIdStr), Number(offsetStr)));
       return;
     }
 
