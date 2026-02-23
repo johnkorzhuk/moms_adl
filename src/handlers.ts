@@ -68,18 +68,85 @@ function parseTimeToISO(input: string, referenceISO?: string): string | null {
   return null;
 }
 
-function buildISO(hours: number, minutes: number, referenceISO?: string): string {
-  const ref = referenceISO ? new Date(referenceISO) : new Date();
-  const dateStr = ref.toLocaleDateString("en-CA", { timeZone: TZ }); // YYYY-MM-DD from the event's day
-  const hh = String(hours).padStart(2, "0");
-  const mm = String(minutes).padStart(2, "0");
-  const d = new Date(`${dateStr}T${hh}:${mm}:00`);
-  // Workers run in UTC — adjust for TZ offset
+function getTZOffsetMs(): number {
   const now = new Date();
   const utcNow = new Date(now.toLocaleString("en-US", { timeZone: "UTC" }));
   const tzNow = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
-  const offsetMs = utcNow.getTime() - tzNow.getTime();
-  return new Date(d.getTime() + offsetMs).toISOString();
+  return utcNow.getTime() - tzNow.getTime();
+}
+
+function localToUTC(dateStr: string, hours: number, minutes: number): Date {
+  const hh = String(hours).padStart(2, "0");
+  const mm = String(minutes).padStart(2, "0");
+  const d = new Date(`${dateStr}T${hh}:${mm}:00`);
+  return new Date(d.getTime() + getTZOffsetMs());
+}
+
+function nextDay(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00");
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function buildISO(hours: number, minutes: number, referenceISO?: string): string {
+  const ref = referenceISO ? new Date(referenceISO) : new Date();
+  const dateStr = ref.toLocaleDateString("en-CA", { timeZone: TZ });
+  return localToUTC(dateStr, hours, minutes).toISOString();
+}
+
+/**
+ * Parse a time string and resolve it to the closest time AFTER the reference.
+ * For done_at entries: "12:30" with a ref of 8:40 PM → 12:30 AM next day.
+ * Without AM/PM, considers both AM and PM on reference day and next day,
+ * then picks the closest candidate after the reference time.
+ */
+function parseTimeAfterRef(input: string, referenceISO: string): string | null {
+  const trimmed = input.trim().toUpperCase();
+  const ref = new Date(referenceISO);
+  const refDateStr = ref.toLocaleDateString("en-CA", { timeZone: TZ });
+  const nextDateStr = nextDay(refDateStr);
+
+  // Parse into candidate times-of-day (24h format)
+  let timesOfDay: [number, number][] = [];
+
+  const match12 = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/);
+  if (match12) {
+    let hours = Number(match12[1]);
+    const minutes = Number(match12[2]);
+    const period = match12[3];
+    if (hours < 1 || hours > 12 || minutes > 59) return null;
+    if (period === "AM" && hours === 12) hours = 0;
+    if (period === "PM" && hours !== 12) hours += 12;
+    timesOfDay = [[hours, minutes]];
+  } else {
+    const match24 = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+    if (!match24) return null;
+    const hours = Number(match24[1]);
+    const minutes = Number(match24[2]);
+    if (hours > 23 || minutes > 59) return null;
+
+    if (hours >= 13 || hours === 0) {
+      timesOfDay = [[hours, minutes]];
+    } else if (hours === 12) {
+      timesOfDay = [[12, minutes], [0, minutes]];
+    } else {
+      timesOfDay = [[hours, minutes], [hours + 12, minutes]];
+    }
+  }
+
+  // Generate candidates on reference day and next day
+  const candidates: Date[] = [];
+  for (const [h, m] of timesOfDay) {
+    candidates.push(localToUTC(refDateStr, h, m));
+    candidates.push(localToUTC(nextDateStr, h, m));
+  }
+
+  // Pick the closest candidate that is after the reference time
+  const afterRef = candidates
+    .filter((c) => c.getTime() > ref.getTime())
+    .sort((a, b) => a.getTime() - b.getTime());
+
+  return afterRef.length > 0 ? afterRef[0].toISOString() : null;
 }
 
 const editMenu = (
@@ -407,11 +474,13 @@ export const handleGroupTimeReply = (
     yield* log(`Group time reply: event #${eventId}, time: ${timeText}`);
     const repo = yield* EventRepo;
 
-    // Fetch the event to use its creation date for the custom time
+    // Fetch the event to use its start time as reference for smart resolution
     const event = yield* repo.get(eventId);
     const referenceISO = event?.timestamp;
 
-    const timestamp = parseTimeToISO(timeText, referenceISO ?? undefined);
+    const timestamp = referenceISO
+      ? parseTimeAfterRef(timeText, referenceISO)
+      : parseTimeToISO(timeText);
     if (!timestamp) {
       yield* log(`Failed to parse time: "${timeText}"`);
     }
@@ -839,7 +908,7 @@ export const handleInsertDoneReply = (
     const state: InsertState = JSON.parse(stateJson);
     if (!state.timestamp) return;
 
-    const doneAt = parseTimeToISO(timeText, state.timestamp);
+    const doneAt = parseTimeAfterRef(timeText, state.timestamp);
     if (!doneAt) {
       yield* log(`Failed to parse done time: "${timeText}"`);
       return;

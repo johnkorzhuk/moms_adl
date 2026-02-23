@@ -2,6 +2,7 @@ import { Config } from "./types";
 
 export const config: Config = {
     categories: {
+        // --- Most frequent, paired (always at top) ---
         toilet: {
             type: "paired",
             label: "🚽 Туалет",
@@ -23,6 +24,8 @@ export const config: Config = {
             finish_label: "✅ Готово",
             finish_name: "Transfer Done",
         },
+
+        // --- Daily essentials (single tap) ---
         bathing: {
             type: "single",
             label: "🛁 Душ",
@@ -33,30 +36,41 @@ export const config: Config = {
             label: "👔 Одяг",
             name: "Dressing",
         },
+        medication: {
+            type: "single",
+            label: "💊 Ліки",
+            name: "Took Meds",
+        },
+
+        // --- Meals (subtasks) ---
         meals: {
             type: "subtasks",
             label: "🍽️ Їжа",
             name: "Meals",
             subtasks: [
-                { label: "Сніданок", name: "Breakfast" },
-                { label: "Обід", name: "Lunch" },
-                { label: "Вечеря", name: "Dinner" },
-                { label: "Перекус", name: "Snack / Drink" },
+                { label: "🌅 Сніданок", name: "Breakfast" },
+                { label: "☀️ Обід", name: "Lunch" },
+                { label: "🌙 Вечеря", name: "Dinner" },
+                { label: "🥤 Перекус", name: "Snack / Drink" },
             ],
         },
-        medication: {
+
+        // --- Household (subtasks) ---
+        chores: {
             type: "subtasks",
-            label: "💊 Ліки",
-            name: "Medication",
+            label: "🧹 Прибирання",
+            name: "Chores",
             subtasks: [
-                { label: "Прийняла", name: "Took Meds" },
-                { label: "Розкласти ліки", name: "Sort Meds" },
-                { label: "Аптека", name: "Pharmacy Pickup" },
+                { label: "Пилосос", name: "Vacuum" },
+                { label: "Мити підлогу", name: "Wash Floors" },
+                { label: "Сміття", name: "Trash" },
+                { label: "Чистити ванну", name: "Clean Bathroom" },
+                { label: "Прибрати відходи", name: "Incontinence Cleanup" },
             ],
         },
         dishes: {
             type: "subtasks",
-            label: "🍽️ Посуд",
+            label: "🧽 Посуд",
             name: "Dishes",
             subtasks: [
                 { label: "Мити", name: "Wash Dishes" },
@@ -72,24 +86,7 @@ export const config: Config = {
                 { label: "Сушарка", name: "Dryer" },
             ],
         },
-        chores: {
-            type: "subtasks",
-            label: "🧹 Прибирання",
-            name: "Chores",
-            subtasks: [
-                { label: "Пилосос", name: "Vacuum" },
-                { label: "Мити підлогу", name: "Wash Floors" },
-                { label: "Сміття", name: "Trash" },
-                { label: "Чистити ванну", name: "Clean Bathroom" },
-                { label: "Прибрати відходи", name: "Incontinence Cleanup" },
-            ],
-        },
-        driving: {
-            type: "subtasks",
-            label: "🚗 Їздити",
-            name: "Driving",
-            subtasks: [{ label: "Продукти", name: "Grocery Shopping" }],
-        },
+
         reach: {
             type: "subtasks",
             label: "📦 Дістати",
@@ -100,6 +97,16 @@ export const config: Config = {
                 { label: "З верхньої полиці", name: "Item from High Shelf" },
                 { label: "Закрити жалюзі", name: "Close Blinds" },
                 { label: "Інше", name: "Other" },
+            ],
+        },
+        // --- Less frequent ---
+        driving: {
+            type: "subtasks",
+            label: "🚗 Їздити",
+            name: "Driving",
+            subtasks: [
+                { label: "Продукти", name: "Grocery Shopping" },
+                { label: "Аптека", name: "Pharmacy Pickup" },
             ],
         },
     },
