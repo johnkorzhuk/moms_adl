@@ -2,6 +2,7 @@ export interface Env {
   BOT_TOKEN: string;
   GROUP_CHAT_ID: string;
   USER_ID: string;
+  MANAGER_ID: string;
   KV: KVNamespace;
   DB: D1Database;
 }

@@ -50,16 +50,18 @@ export function createBot(env: Env): Bot {
     );
 
   const isMom = (userId: number) => String(userId) === env.USER_ID;
+  const isManager = (userId: number) => String(userId) === env.MANAGER_ID;
+  const isAuthorized = (userId: number) => isMom(userId) || isManager(userId);
 
   // ─── Commands (mom only) ───
 
   bot.command("start", (ctx) => {
-    if (!isMom(ctx.from!.id)) return;
+    if (!isAuthorized(ctx.from!.id)) return;
     return run(ctx.api, handleStart(ctx.api, ctx.chat.id));
   });
 
   bot.command("export", (ctx) => {
-    if (!isMom(ctx.from!.id)) return;
+    if (!isAuthorized(ctx.from!.id)) return;
     return run(ctx.api, handleExport(ctx.api, ctx.chat.id));
   });
 
@@ -118,8 +120,8 @@ export function createBot(env: Env): Bot {
       return run(ctx.api, handleGroupLogCustom(ctx.api, chatId, msgId, env.KV));
     }
 
-    // ── Mom's private chat callbacks (mom only) ──
-    if (!isMom(ctx.callbackQuery.from.id)) return;
+    // ── Private chat callbacks (authorized users only) ──
+    if (!isAuthorized(ctx.callbackQuery.from.id)) return;
 
     const menuMsgId = await Effect.runPromise(
       Effect.gen(function* () {
