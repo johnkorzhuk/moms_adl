@@ -15,6 +15,10 @@ import {
   handleGroupCustomTime,
   handleGroupTimeReply,
 
+  handleGroupEditStart,
+  handleGroupStartTimeReply,
+  handleGroupDelete,
+
   handleGroupLog,
   handleGroupLogCategory,
   handleGroupLogSubtask,
@@ -91,6 +95,18 @@ export function createBot(env: Env): Bot {
       const groupMsgId = ctx.callbackQuery.message?.message_id;
       if (!groupMsgId) return;
       return run(ctx.api, handleGroupCustomTime(eventId, groupMsgId, env.KV));
+    }
+
+    if (data.startsWith("editstart:")) {
+      const eventId = Number(data.slice(10));
+      const groupMsgId = ctx.callbackQuery.message?.message_id;
+      if (!groupMsgId) return;
+      return run(ctx.api, handleGroupEditStart(eventId, groupMsgId, env.KV));
+    }
+
+    if (data.startsWith("delete:")) {
+      const eventId = Number(data.slice(7));
+      return run(ctx.api, handleGroupDelete(eventId));
     }
 
     // ── Group /log callbacks ──
@@ -185,6 +201,16 @@ export function createBot(env: Env): Bot {
       console.log(`[adl] Custom time reply for event #${eventId}: ${msg.text}`);
       await env.KV.delete(`customtime:${replyTo.message_id}`);
       await run(ctx.api, handleGroupTimeReply(ctx.api, eventId, msg.text));
+      return;
+    }
+
+    // Check if this is a reply to our "edit start time" prompt
+    const editStartStr = await env.KV.get(`editstart:${replyTo.message_id}`);
+    if (editStartStr) {
+      const eventId = Number(editStartStr);
+      console.log(`[adl] Edit start time reply for event #${eventId}: ${msg.text}`);
+      await env.KV.delete(`editstart:${replyTo.message_id}`);
+      await run(ctx.api, handleGroupStartTimeReply(ctx.api, eventId, msg.text));
       return;
     }
 

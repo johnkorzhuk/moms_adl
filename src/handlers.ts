@@ -166,10 +166,24 @@ const markDoneAndUpdateGroup = (
       return;
     }
 
+    // Fetch the event to get its start time for display
+    const event = yield* repo.get(eventId);
+    const startDisplay = event
+      ? new Date(event.timestamp).toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+          timeZone: TZ,
+        })
+      : null;
+    const prefix = startDisplay
+      ? `${groupInfo.categoryName} — ${startDisplay}`
+      : groupInfo.categoryName;
+
     yield* editGroupMsgSafe(
       notifier,
       groupInfo.groupMsgId,
-      `${groupInfo.categoryName} — Done at ${displayTime}`,
+      `${prefix} — Done at ${displayTime}`,
       groupEditTimeKeyboard(eventId)
     );
 
@@ -409,6 +423,106 @@ export const handleGroupTimeReply = (
       : timeText;
 
     yield* markDoneAndUpdateGroup(api, eventId, timestamp ?? timeText, displayTime);
+  });
+
+/** Edit start time: ask for time input, store pending request in KV. */
+export const handleGroupEditStart = (
+  eventId: number,
+  groupMsgId: number,
+  kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Group edit start: event #${eventId}`);
+    const notifier = yield* Notifier;
+
+    const botMsgId = yield* notifier.askCustomTime(groupMsgId);
+
+    yield* Effect.tryPromise({
+      try: () => kv.put(`editstart:${botMsgId}`, String(eventId)),
+      catch: (cause) => new KVError({ cause }),
+    });
+  });
+
+/** Handle text reply in group with edited start time. */
+export const handleGroupStartTimeReply = (
+  api: Api,
+  eventId: number,
+  timeText: string
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Group start time reply: event #${eventId}, time: ${timeText}`);
+    const repo = yield* EventRepo;
+    const menuState = yield* MenuState;
+    const notifier = yield* Notifier;
+
+    const event = yield* repo.get(eventId);
+    const referenceISO = event?.timestamp;
+
+    const timestamp = parseTimeToISO(timeText, referenceISO ?? undefined);
+    if (!timestamp) {
+      yield* log(`Failed to parse time: "${timeText}"`);
+      return;
+    }
+
+    yield* repo.updateTimestamp(eventId, timestamp);
+
+    const displayStart = new Date(timestamp).toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: TZ,
+    });
+
+    const groupInfo = yield* menuState.getGroupMsg(eventId);
+    if (!groupInfo) return;
+
+    // Rebuild the group message text with updated start time
+    const updatedEvent = yield* repo.get(eventId);
+    if (updatedEvent?.status === "done" && updatedEvent.done_at) {
+      const displayDone = new Date(updatedEvent.done_at).toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: TZ,
+      });
+      yield* editGroupMsgSafe(
+        notifier,
+        groupInfo.groupMsgId,
+        `${groupInfo.categoryName} — ${displayStart} — Done at ${displayDone}`,
+        groupEditTimeKeyboard(eventId)
+      );
+    } else {
+      yield* editGroupMsgSafe(
+        notifier,
+        groupInfo.groupMsgId,
+        `${groupInfo.categoryName} — ${displayStart}`,
+        groupDoneKeyboard(eventId)
+      );
+    }
+  });
+
+/** Delete an event and remove its group message. */
+export const handleGroupDelete = (
+  eventId: number
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Group delete: event #${eventId}`);
+    const repo = yield* EventRepo;
+    const menuState = yield* MenuState;
+    const notifier = yield* Notifier;
+
+    const groupInfo = yield* menuState.getGroupMsg(eventId);
+
+    yield* repo.deleteEvent(eventId);
+
+    if (groupInfo) {
+      yield* notifier.deleteGroupMsg(groupInfo.groupMsgId).pipe(
+        Effect.catchTag("TelegramError", (e) =>
+          Effect.sync(() => console.error("[adl] Failed to delete group msg:", e.cause))
+        )
+      );
+      yield* menuState.deleteGroupMsg(eventId);
+    }
   });
 
 // ─── Group /log handlers ───

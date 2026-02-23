@@ -13,6 +13,11 @@ export class EventRepo extends Context.Tag("EventRepo")<
       id: number,
       doneAt: string
     ) => Effect.Effect<void, D1Error>;
+    readonly updateTimestamp: (
+      id: number,
+      timestamp: string
+    ) => Effect.Effect<void, D1Error>;
+    readonly deleteEvent: (id: number) => Effect.Effect<void, D1Error>;
     readonly get: (id: number) => Effect.Effect<EventRow | null, D1Error>;
     readonly exportAll: () => Effect.Effect<EventRow[], D1Error>;
   }
@@ -42,6 +47,28 @@ export const EventRepoLive = (db: D1Database) =>
           db
             .prepare("UPDATE events SET status = 'done', done_at = ? WHERE id = ?")
             .bind(doneAt, id)
+            .run()
+            .then(() => undefined),
+        catch: (cause) => new D1Error({ cause }),
+      }),
+
+    updateTimestamp: (id, timestamp) =>
+      Effect.tryPromise({
+        try: () =>
+          db
+            .prepare("UPDATE events SET timestamp = ? WHERE id = ?")
+            .bind(timestamp, id)
+            .run()
+            .then(() => undefined),
+        catch: (cause) => new D1Error({ cause }),
+      }),
+
+    deleteEvent: (id) =>
+      Effect.tryPromise({
+        try: () =>
+          db
+            .prepare("DELETE FROM events WHERE id = ?")
+            .bind(id)
             .run()
             .then(() => undefined),
         catch: (cause) => new D1Error({ cause }),

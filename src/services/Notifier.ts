@@ -25,6 +25,10 @@ export class Notifier extends Context.Tag("Notifier")<
       text: string,
       keyboard?: InlineKeyboard
     ) => Effect.Effect<void, TelegramError>;
+    /** Delete a group message. */
+    readonly deleteGroupMsg: (
+      msgId: number
+    ) => Effect.Effect<void, TelegramError>;
     /** Reply to a group message asking for custom time. Returns the bot's message ID. */
     readonly askCustomTime: (
       replyToMsgId: number
@@ -52,6 +56,15 @@ export const NotifierLive = (api: Api, groupChatId: string) =>
             .editMessageText(groupChatId, msgId, text, {
               reply_markup: keyboard ?? { inline_keyboard: [] },
             })
+            .then(() => undefined),
+        catch: (cause) => new TelegramError({ cause }),
+      }),
+
+    deleteGroupMsg: (msgId) =>
+      Effect.tryPromise({
+        try: () =>
+          api
+            .deleteMessage(groupChatId, msgId)
             .then(() => undefined),
         catch: (cause) => new TelegramError({ cause }),
       }),

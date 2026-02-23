@@ -34,12 +34,17 @@ export function groupDoneKeyboard(eventId: number): InlineKeyboard {
   return new InlineKeyboard()
     .text("✅ Done", `done:${eventId}`)
     .text("🕐 Custom Time", `customtime:${eventId}`)
+    .row()
+    .text("🗑️ Delete", `delete:${eventId}`)
     .row();
 }
 
 export function groupEditTimeKeyboard(eventId: number): InlineKeyboard {
   return new InlineKeyboard()
-    .text("✏️ Edit Time", `customtime:${eventId}`)
+    .text("✏️ Edit Start", `editstart:${eventId}`)
+    .text("✏️ Edit Done", `customtime:${eventId}`)
+    .row()
+    .text("🗑️ Delete", `delete:${eventId}`)
     .row();
 }
 
