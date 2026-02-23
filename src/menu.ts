@@ -42,3 +42,24 @@ export function groupEditTimeKeyboard(eventId: number): InlineKeyboard {
     .text("✏️ Edit Time", `customtime:${eventId}`)
     .row();
 }
+
+export function groupLogKeyboard(): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (const [id, cat] of Object.entries(config.categories)) {
+    kb.text(cat.name, `gcat:${id}`).row();
+  }
+  kb.text("✏️ Custom", "gcustom").row();
+  return kb;
+}
+
+export function groupLogSubtaskKeyboard(categoryId: string): InlineKeyboard {
+  const cat = config.categories[categoryId];
+  if (cat.type !== "subtasks") throw new Error(`Not a subtask category: ${categoryId}`);
+
+  const kb = new InlineKeyboard();
+  kb.text("⬅️ Back", "gback").row();
+  for (let i = 0; i < cat.subtasks.length; i++) {
+    kb.text(cat.subtasks[i].name, `gsub:${categoryId}:${i}`).row();
+  }
+  return kb;
+}

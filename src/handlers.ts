@@ -8,6 +8,8 @@ import {
   pairedFinishKeyboard,
   groupDoneKeyboard,
   groupEditTimeKeyboard,
+  groupLogKeyboard,
+  groupLogSubtaskKeyboard,
   MAIN_MENU_TEXT,
 } from "./menu";
 import { EventRepo } from "./services/EventRepo";
@@ -407,4 +409,111 @@ export const handleGroupTimeReply = (
       : timeText;
 
     yield* markDoneAndUpdateGroup(api, eventId, timestamp ?? timeText, displayTime);
+  });
+
+// ─── Group /log handlers ───
+
+const deleteMsgSafe = (api: Api, chatId: number, msgId: number) =>
+  Effect.tryPromise({
+    try: () => api.deleteMessage(chatId, msgId).then(() => undefined),
+    catch: (cause) => new TelegramError({ cause }),
+  }).pipe(Effect.catchTag("TelegramError", () => Effect.void));
+
+/** /log command: show category picker in group. */
+export const handleGroupLog = (api: Api, chatId: number): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log("/log in group");
+    yield* Effect.tryPromise({
+      try: () => api.sendMessage(chatId, "What to log?", { reply_markup: groupLogKeyboard() }),
+      catch: (cause) => new TelegramError({ cause }),
+    });
+  });
+
+/** Group log: category tapped (single/paired log immediately, subtasks show submenu). */
+export const handleGroupLogCategory = (
+  api: Api,
+  chatId: number,
+  menuMsgId: number,
+  catId: string
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    const cat = config.categories[catId];
+    if (!cat) return;
+
+    if (cat.type === "subtasks") {
+      yield* log(`Group log subtask menu: ${catId}`);
+      yield* editMenu(api, chatId, menuMsgId, cat.label, groupLogSubtaskKeyboard(catId));
+      return;
+    }
+
+    yield* log(`Group log: ${cat.name}`);
+    yield* deleteMsgSafe(api, chatId, menuMsgId);
+    yield* logAndNotify(0, 0, cat.name, "open");
+  });
+
+/** Group log: subtask tapped. */
+export const handleGroupLogSubtask = (
+  api: Api,
+  chatId: number,
+  menuMsgId: number,
+  catId: string,
+  subtaskIndex: number
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    const cat = config.categories[catId];
+    if (cat.type !== "subtasks") return;
+    const subtask = cat.subtasks[subtaskIndex];
+    if (!subtask) return;
+
+    const label = `${cat.name} — ${subtask.name}`;
+    yield* log(`Group log sub: ${label}`);
+    yield* deleteMsgSafe(api, chatId, menuMsgId);
+    yield* logAndNotify(0, 0, label, "open");
+  });
+
+/** Group log: back to category list. */
+export const handleGroupLogBack = (
+  api: Api,
+  chatId: number,
+  menuMsgId: number
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log("Group log: back");
+    yield* editMenu(api, chatId, menuMsgId, "What to log?", groupLogKeyboard());
+  });
+
+/** Group log: custom event — prompt for text. */
+export const handleGroupLogCustom = (
+  api: Api,
+  chatId: number,
+  menuMsgId: number,
+  kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log("Group log: custom prompt");
+    yield* deleteMsgSafe(api, chatId, menuMsgId);
+
+    const msg = yield* Effect.tryPromise({
+      try: () =>
+        api.sendMessage(chatId, "Reply with the event name:", {
+          reply_markup: { force_reply: true, selective: true },
+        }),
+      catch: (cause) => new TelegramError({ cause }),
+    });
+
+    yield* Effect.tryPromise({
+      try: () => kv.put(`customevent:${msg.message_id}`, "1"),
+      catch: (cause) => new KVError({ cause }),
+    });
+  });
+
+/** Group log: handle custom event text reply. */
+export const handleGroupLogCustomReply = (
+  api: Api,
+  chatId: number,
+  eventName: string
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Group log custom: ${eventName}`);
+    yield* logAndNotify(0, 0, eventName, "open");
   });

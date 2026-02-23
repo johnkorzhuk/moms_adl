@@ -14,6 +14,13 @@ import {
   handleGroupDone,
   handleGroupCustomTime,
   handleGroupTimeReply,
+
+  handleGroupLog,
+  handleGroupLogCategory,
+  handleGroupLogSubtask,
+  handleGroupLogBack,
+  handleGroupLogCustom,
+  handleGroupLogCustomReply,
 } from "./handlers";
 import { EventRepo, EventRepoLive } from "./services/EventRepo";
 import { MenuState, MenuStateLive } from "./services/MenuState";
@@ -56,6 +63,13 @@ export function createBot(env: Env): Bot {
     return run(ctx.api, handleExport(ctx.api, ctx.chat.id));
   });
 
+  // ─── Group /log command ───
+
+  bot.command("log", (ctx) => {
+    if (String(ctx.chat.id) !== env.GROUP_CHAT_ID) return;
+    return run(ctx.api, handleGroupLog(ctx.api, ctx.chat.id));
+  });
+
   // ─── Callback queries ───
 
   bot.on("callback_query:data", async (ctx) => {
@@ -75,6 +89,33 @@ export function createBot(env: Env): Bot {
       const groupMsgId = ctx.callbackQuery.message?.message_id;
       if (!groupMsgId) return;
       return run(ctx.api, handleGroupCustomTime(eventId, groupMsgId, env.KV));
+    }
+
+    // ── Group /log callbacks ──
+    if (data.startsWith("gcat:")) {
+      const catId = data.slice(5);
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleGroupLogCategory(ctx.api, chatId, msgId, catId));
+    }
+
+    if (data.startsWith("gsub:")) {
+      const [, catId, indexStr] = data.split(":");
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleGroupLogSubtask(ctx.api, chatId, msgId, catId, Number(indexStr)));
+    }
+
+    if (data === "gback") {
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleGroupLogBack(ctx.api, chatId, msgId));
+    }
+
+    if (data === "gcustom") {
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleGroupLogCustom(ctx.api, chatId, msgId, env.KV));
     }
 
     // ── Mom's private chat callbacks (mom only) ──
@@ -137,15 +178,22 @@ export function createBot(env: Env): Bot {
 
     // Check if this is a reply to our "Reply with the time" prompt
     const eventIdStr = await env.KV.get(`customtime:${replyTo.message_id}`);
-    if (!eventIdStr) return;
+    if (eventIdStr) {
+      const eventId = Number(eventIdStr);
+      console.log(`[adl] Custom time reply for event #${eventId}: ${msg.text}`);
+      await env.KV.delete(`customtime:${replyTo.message_id}`);
+      await run(ctx.api, handleGroupTimeReply(ctx.api, eventId, msg.text));
+      return;
+    }
 
-    const eventId = Number(eventIdStr);
-    console.log(`[adl] Custom time reply for event #${eventId}: ${msg.text}`);
-
-    // Clean up the KV entry
-    await env.KV.delete(`customtime:${replyTo.message_id}`);
-
-    await run(ctx.api, handleGroupTimeReply(ctx.api, eventId, msg.text));
+    // Check if this is a reply to our custom event name prompt
+    const customEventFlag = await env.KV.get(`customevent:${replyTo.message_id}`);
+    if (customEventFlag) {
+      console.log(`[adl] Custom event reply: ${msg.text}`);
+      await env.KV.delete(`customevent:${replyTo.message_id}`);
+      await run(ctx.api, handleGroupLogCustomReply(ctx.api, ctx.chat.id, msg.text));
+      return;
+    }
   });
 
   return bot;

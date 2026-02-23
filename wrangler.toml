@@ -7,6 +7,9 @@ account_id = "f846204052f664d57da7acde8f6803cd"
 # GROUP_CHAT_ID = "-100xxxxxxxxxx"  # Set via: wrangler secret put GROUP_CHAT_ID
 # BOT_TOKEN is a secret — set via: wrangler secret put BOT_TOKEN
 
+[observability]
+enabled = true
+
 [[kv_namespaces]]
 binding = "KV"
 id = "cf5a4bd560504935a3efaface176b9d3"
