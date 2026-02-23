@@ -1,16 +1,44 @@
 export interface Env {
   BOT_TOKEN: string;
   GROUP_CHAT_ID: string;
+  USER_ID: string;
   KV: KVNamespace;
   DB: D1Database;
 }
 
-export interface CategoryItem {
+export interface SubtaskItem {
   label: string;
-  /** If present, this category has sub-tasks. If absent, it's single-level. */
-  subtasks?: { label: string }[];
+  name: string;
 }
+
+export type CategoryItem =
+  | {
+      type: "single";
+      label: string;
+      name: string;
+    }
+  | {
+      type: "paired";
+      label: string;
+      name: string;
+      finish_label: string;
+      finish_name: string;
+    }
+  | {
+      type: "subtasks";
+      label: string;
+      name: string;
+      subtasks: SubtaskItem[];
+    };
 
 export interface Config {
   categories: Record<string, CategoryItem>;
+}
+
+export interface EventRow {
+  id: number;
+  timestamp: string;
+  category: string;
+  status: string;
+  done_at: string | null;
 }

@@ -1,5 +1,5 @@
 import { Effect, Context, Layer } from "effect";
-import { Api } from "grammy";
+import { Api, InlineKeyboard } from "grammy";
 import { TelegramError } from "../errors";
 
 function formatTime(): string {
@@ -14,31 +14,63 @@ function formatTime(): string {
 export class Notifier extends Context.Tag("Notifier")<
   Notifier,
   {
-    readonly send: (text: string) => Effect.Effect<void, TelegramError>;
-    readonly urgent: () => Effect.Effect<void, TelegramError>;
+    /** Send a notification with inline keyboard. Returns the message ID. */
+    readonly send: (
+      text: string,
+      keyboard: InlineKeyboard
+    ) => Effect.Effect<number, TelegramError>;
+    /** Edit a group message's text and remove keyboard. */
+    readonly editGroupMsg: (
+      msgId: number,
+      text: string
+    ) => Effect.Effect<void, TelegramError>;
+    /** Reply to a group message asking for custom time. Returns the bot's message ID. */
+    readonly askCustomTime: (
+      replyToMsgId: number
+    ) => Effect.Effect<number, TelegramError>;
   }
 >() {}
 
 export const NotifierLive = (api: Api, groupChatId: string) =>
   Layer.succeed(Notifier, {
-    send: (text) =>
+    send: (text, keyboard) =>
       Effect.tryPromise({
         try: () =>
           api
-            .sendMessage(groupChatId, `${text} — ${formatTime()}`)
+            .sendMessage(groupChatId, `${text} — ${formatTime()}`, {
+              reply_markup: keyboard,
+            })
+            .then((msg) => msg.message_id),
+        catch: (cause) => new TelegramError({ cause }),
+      }),
+
+    editGroupMsg: (msgId, text) =>
+      Effect.tryPromise({
+        try: () =>
+          api
+            .editMessageText(groupChatId, msgId, text, {
+              reply_markup: { inline_keyboard: [] },
+            })
             .then(() => undefined),
         catch: (cause) => new TelegramError({ cause }),
       }),
 
-    urgent: () =>
+    askCustomTime: (replyToMsgId) =>
       Effect.tryPromise({
         try: () =>
           api
             .sendMessage(
               groupChatId,
-              `🆘 URGENT: Mom needs help! — ${formatTime()}`
+              `Reply with the time (e.g. "2:35 PM"):`,
+              {
+                reply_parameters: { message_id: replyToMsgId },
+                reply_markup: {
+                  force_reply: true,
+                  selective: true,
+                },
+              }
             )
-            .then(() => undefined),
+            .then((msg) => msg.message_id),
         catch: (cause) => new TelegramError({ cause }),
       }),
   });

@@ -1,0 +1,2 @@
+ALTER TABLE events ADD COLUMN status TEXT NOT NULL DEFAULT 'open';
+ALTER TABLE events ADD COLUMN done_at TEXT;
