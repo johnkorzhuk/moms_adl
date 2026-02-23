@@ -18,6 +18,10 @@ export class EventRepo extends Context.Tag("EventRepo")<
       timestamp: string
     ) => Effect.Effect<void, D1Error>;
     readonly deleteEvent: (id: number) => Effect.Effect<void, D1Error>;
+    readonly listPage: (
+      offset: number,
+      limit: number
+    ) => Effect.Effect<EventRow[], D1Error>;
     readonly get: (id: number) => Effect.Effect<EventRow | null, D1Error>;
     readonly exportAll: () => Effect.Effect<EventRow[], D1Error>;
   }
@@ -71,6 +75,19 @@ export const EventRepoLive = (db: D1Database) =>
             .bind(id)
             .run()
             .then(() => undefined),
+        catch: (cause) => new D1Error({ cause }),
+      }),
+
+    listPage: (offset, limit) =>
+      Effect.tryPromise({
+        try: () =>
+          db
+            .prepare(
+              "SELECT id, timestamp, category, status, done_at FROM events ORDER BY id DESC LIMIT ? OFFSET ?"
+            )
+            .bind(limit, offset)
+            .all<EventRow>()
+            .then((r) => r.results),
         catch: (cause) => new D1Error({ cause }),
       }),
 

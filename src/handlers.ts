@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { Api, InputFile } from "grammy";
+import { Api, InputFile, InlineKeyboard } from "grammy";
 import { config } from "./config";
 import { D1Error, KVError, TelegramError } from "./errors";
 import {
@@ -13,6 +13,7 @@ import {
   MAIN_MENU_TEXT,
 } from "./menu";
 import { EventRepo } from "./services/EventRepo";
+import { EventRow } from "./types";
 import { MenuState } from "./services/MenuState";
 import { Notifier } from "./services/Notifier";
 
@@ -630,4 +631,220 @@ export const handleGroupLogCustomReply = (
   Effect.gen(function* () {
     yield* log(`Group log custom: ${eventName}`);
     yield* logAndNotify(0, 0, eventName, "open");
+  });
+
+// ─── Group /edit handlers ───
+
+const EDIT_PAGE_SIZE = 8;
+const EDIT_PAGE_STEP = EDIT_PAGE_SIZE - 1; // 1 item overlap
+
+function formatEventTime(iso: string): string {
+  return new Date(iso).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: TZ,
+  });
+}
+
+const buildEditPageContent = (events: EventRow[], offset: number, hasMore: boolean) => {
+  const display = events.slice(0, EDIT_PAGE_SIZE).reverse();
+
+  const kb = new InlineKeyboard();
+
+  if (hasMore) {
+    kb.text("⬆️ Older", `ep:${offset + EDIT_PAGE_STEP}`).row();
+  }
+
+  for (const event of display) {
+    const time = new Date(event.timestamp).toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: TZ,
+    });
+    const status = event.status === "done" ? " ✅" : "";
+    kb.text(`${event.category} — ${time}${status}`, `es:${event.id}:${offset}`).row();
+  }
+
+  if (offset > 0) {
+    kb.text("⬇️ Newer", `ep:${Math.max(0, offset - EDIT_PAGE_STEP)}`).row();
+  }
+
+  return { text: "Select an event to edit:", keyboard: kb };
+};
+
+/** /edit command: send paginated event list. */
+export const handleEditCommand = (api: Api, chatId: number): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log("/edit in group");
+    const repo = yield* EventRepo;
+    const events = yield* repo.listPage(0, EDIT_PAGE_SIZE + 1);
+
+    if (events.length === 0) {
+      yield* Effect.tryPromise({
+        try: () => api.sendMessage(chatId, "No events to edit."),
+        catch: (cause) => new TelegramError({ cause }),
+      });
+      return;
+    }
+
+    const hasMore = events.length > EDIT_PAGE_SIZE;
+    const { text, keyboard } = buildEditPageContent(events, 0, hasMore);
+
+    yield* Effect.tryPromise({
+      try: () => api.sendMessage(chatId, text, { reply_markup: keyboard }),
+      catch: (cause) => new TelegramError({ cause }),
+    });
+  });
+
+/** Navigate to a page in the edit list. */
+export const handleEditPage = (
+  api: Api,
+  chatId: number,
+  menuMsgId: number,
+  offset: number
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Edit page: offset ${offset}`);
+    const repo = yield* EventRepo;
+    const events = yield* repo.listPage(offset, EDIT_PAGE_SIZE + 1);
+
+    const hasMore = events.length > EDIT_PAGE_SIZE;
+    const { text, keyboard } = buildEditPageContent(events, offset, hasMore);
+
+    yield* editMenu(api, chatId, menuMsgId, text, keyboard);
+  });
+
+/** Show event detail with action buttons. */
+export const handleEditSelect = (
+  api: Api,
+  chatId: number,
+  menuMsgId: number,
+  eventId: number,
+  offset: number
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Edit select: event #${eventId}`);
+    const repo = yield* EventRepo;
+    const event = yield* repo.get(eventId);
+    if (!event) return;
+
+    const startTime = formatEventTime(event.timestamp);
+    let text = `${event.category}\nStarted: ${startTime}`;
+
+    if (event.status === "done" && event.done_at) {
+      text += `\nDone: ${formatEventTime(event.done_at)}`;
+    } else {
+      text += "\nStatus: Open";
+    }
+
+    const kb = new InlineKeyboard();
+    kb.text("✏️ Edit Start", `est:${eventId}`);
+    if (event.status === "done") {
+      kb.text("✏️ Edit Done", `edt:${eventId}`);
+    }
+    kb.row();
+    kb.text("🗑️ Delete", `edl:${eventId}:${offset}`).row();
+    kb.text("⬅️ Back", `eb:${offset}`).row();
+
+    yield* editMenu(api, chatId, menuMsgId, text, kb);
+  });
+
+/** Edit start time from /edit menu — prompt for time via force_reply. */
+export const handleEditStartFromList = (
+  api: Api,
+  chatId: number,
+  menuMsgId: number,
+  eventId: number,
+  kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Edit start from list: event #${eventId}`);
+    yield* deleteMsgSafe(api, chatId, menuMsgId);
+
+    const msg = yield* Effect.tryPromise({
+      try: () =>
+        api.sendMessage(chatId, `Reply with the start time (e.g. "2:35 PM"):`, {
+          reply_markup: { force_reply: true, selective: true },
+        }),
+      catch: (cause) => new TelegramError({ cause }),
+    });
+
+    yield* Effect.tryPromise({
+      try: () => kv.put(`editstart:${msg.message_id}`, String(eventId)),
+      catch: (cause) => new KVError({ cause }),
+    });
+  });
+
+/** Edit done time from /edit menu — prompt for time via force_reply. */
+export const handleEditDoneFromList = (
+  api: Api,
+  chatId: number,
+  menuMsgId: number,
+  eventId: number,
+  kv: KVNamespace
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Edit done from list: event #${eventId}`);
+    yield* deleteMsgSafe(api, chatId, menuMsgId);
+
+    const msg = yield* Effect.tryPromise({
+      try: () =>
+        api.sendMessage(chatId, `Reply with the done time (e.g. "2:35 PM"):`, {
+          reply_markup: { force_reply: true, selective: true },
+        }),
+      catch: (cause) => new TelegramError({ cause }),
+    });
+
+    yield* Effect.tryPromise({
+      try: () => kv.put(`customtime:${msg.message_id}`, String(eventId)),
+      catch: (cause) => new KVError({ cause }),
+    });
+  });
+
+/** Delete event from /edit menu and refresh the page. */
+export const handleEditDeleteFromList = (
+  api: Api,
+  chatId: number,
+  menuMsgId: number,
+  eventId: number,
+  offset: number
+): Effect.Effect<void, Err, Deps> =>
+  Effect.gen(function* () {
+    yield* log(`Edit delete from list: event #${eventId}`);
+    const repo = yield* EventRepo;
+    const menuState = yield* MenuState;
+    const notifier = yield* Notifier;
+
+    // Delete group notification message if it exists
+    const groupInfo = yield* menuState.getGroupMsg(eventId);
+    if (groupInfo) {
+      yield* notifier.deleteGroupMsg(groupInfo.groupMsgId).pipe(
+        Effect.catchTag("TelegramError", (e) =>
+          Effect.sync(() => console.error("[adl] Failed to delete group msg:", e.cause))
+        )
+      );
+      yield* menuState.deleteGroupMsg(eventId);
+    }
+
+    yield* repo.deleteEvent(eventId);
+
+    // Refresh the page
+    const events = yield* repo.listPage(offset, EDIT_PAGE_SIZE + 1);
+    if (events.length === 0 && offset > 0) {
+      // Current page is empty, go back to first page
+      const firstPageEvents = yield* repo.listPage(0, EDIT_PAGE_SIZE + 1);
+      const hasMore = firstPageEvents.length > EDIT_PAGE_SIZE;
+      const { text, keyboard } = buildEditPageContent(firstPageEvents, 0, hasMore);
+      yield* editMenu(api, chatId, menuMsgId, text, keyboard);
+    } else if (events.length === 0) {
+      yield* editMenu(api, chatId, menuMsgId, "No events to edit.", new InlineKeyboard());
+    } else {
+      const hasMore = events.length > EDIT_PAGE_SIZE;
+      const { text, keyboard } = buildEditPageContent(events, offset, hasMore);
+      yield* editMenu(api, chatId, menuMsgId, text, keyboard);
+    }
   });

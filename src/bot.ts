@@ -25,6 +25,13 @@ import {
   handleGroupLogBack,
   handleGroupLogCustom,
   handleGroupLogCustomReply,
+
+  handleEditCommand,
+  handleEditPage,
+  handleEditSelect,
+  handleEditStartFromList,
+  handleEditDoneFromList,
+  handleEditDeleteFromList,
 } from "./handlers";
 import { EventRepo, EventRepoLive } from "./services/EventRepo";
 import { MenuState, MenuStateLive } from "./services/MenuState";
@@ -74,6 +81,12 @@ export function createBot(env: Env): Bot {
   bot.command("log", (ctx) => {
     if (String(ctx.chat.id) !== env.GROUP_CHAT_ID) return;
     return run(ctx.api, handleGroupLog(ctx.api, ctx.chat.id));
+  });
+
+  bot.command("edit", (ctx) => {
+    if (String(ctx.chat.id) !== env.GROUP_CHAT_ID) return;
+    if (!isManager(ctx.from!.id)) return;
+    return run(ctx.api, handleEditCommand(ctx.api, ctx.chat.id));
   });
 
   // ─── Callback queries ───
@@ -134,6 +147,55 @@ export function createBot(env: Env): Bot {
       const msgId = ctx.callbackQuery.message?.message_id;
       if (!msgId) return;
       return run(ctx.api, handleGroupLogCustom(ctx.api, chatId, msgId, env.KV));
+    }
+
+    // ── /edit callbacks (manager only) ──
+    if (data.startsWith("ep:")) {
+      if (!isManager(ctx.callbackQuery.from.id)) return;
+      const offset = Number(data.slice(3));
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleEditPage(ctx.api, chatId, msgId, offset));
+    }
+
+    if (data.startsWith("es:")) {
+      if (!isManager(ctx.callbackQuery.from.id)) return;
+      const [, eventIdStr, offsetStr] = data.split(":");
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleEditSelect(ctx.api, chatId, msgId, Number(eventIdStr), Number(offsetStr)));
+    }
+
+    if (data.startsWith("est:")) {
+      if (!isManager(ctx.callbackQuery.from.id)) return;
+      const eventId = Number(data.slice(4));
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleEditStartFromList(ctx.api, chatId, msgId, eventId, env.KV));
+    }
+
+    if (data.startsWith("edt:")) {
+      if (!isManager(ctx.callbackQuery.from.id)) return;
+      const eventId = Number(data.slice(4));
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleEditDoneFromList(ctx.api, chatId, msgId, eventId, env.KV));
+    }
+
+    if (data.startsWith("edl:")) {
+      if (!isManager(ctx.callbackQuery.from.id)) return;
+      const [, eventIdStr, offsetStr] = data.split(":");
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleEditDeleteFromList(ctx.api, chatId, msgId, Number(eventIdStr), Number(offsetStr)));
+    }
+
+    if (data.startsWith("eb:")) {
+      if (!isManager(ctx.callbackQuery.from.id)) return;
+      const offset = Number(data.slice(3));
+      const msgId = ctx.callbackQuery.message?.message_id;
+      if (!msgId) return;
+      return run(ctx.api, handleEditPage(ctx.api, chatId, msgId, offset));
     }
 
     // ── Private chat callbacks (authorized users only) ──
