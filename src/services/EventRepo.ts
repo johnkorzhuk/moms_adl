@@ -103,7 +103,7 @@ export const EventRepoLive = (db: D1Database) =>
         try: () =>
           db
             .prepare(
-              "SELECT id, timestamp, category, status, done_at FROM events ORDER BY id DESC LIMIT ? OFFSET ?"
+              "SELECT id, timestamp, category, status, done_at FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?"
             )
             .bind(limit, offset)
             .all<EventRow>()
@@ -128,7 +128,7 @@ export const EventRepoLive = (db: D1Database) =>
         try: () =>
           db
             .prepare(
-              "SELECT id, timestamp, category, status, done_at FROM events ORDER BY id ASC"
+              "SELECT id, timestamp, category, status, done_at FROM events ORDER BY timestamp ASC"
             )
             .all<EventRow>()
             .then((r) => r.results),

@@ -240,10 +240,10 @@ export const handleExport = (api: Api, chatId: number): Effect.Effect<void, Err,
     }
 
     const csv = [
-      "id,timestamp,category,status,done_at",
+      "timestamp,category,status,done_at",
       ...rows.map(
         (r) =>
-          `${r.id},${r.timestamp},"${r.category}",${r.status},${r.done_at ?? ""}`
+          `${r.timestamp},"${r.category}",${r.status},${r.done_at ?? ""}`
       ),
     ].join("\n");
 
